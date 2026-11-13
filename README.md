@@ -44,8 +44,8 @@ Built for QoreChain's *Build Before Q-Day* developer fest, category Encrypted Ap
 
 Open **https://allot.timidan.xyz** (QoreChain testnet; shares are test tokens and stand for nothing). No wallet is needed.
 
-1. **Practise.** The home page replays sale 1 with your bid added. Price it and press *Seal it*: your browser seals it for real with the seller's key. Press *End the sale* to see who wins and at what price.
-2. **Bid.** Open a sale on [/sales](https://allot.timidan.xyz/sales) and press *Place sealed bid as a guest*. Your browser seals the bid, and a guest account with a registered post-quantum key places it on chain. Keep the receipt: it proves your bid when it opens. One guest bid per visitor a day.
+1. **Practise.** The home page replays sale 1 with your bid added. Price it and press *Seal it*: your browser makes an ML-KEM-1024 key and seals all five bids to it. Press *End the sale*: your browser opens every envelope with that key and settles the sale from what it opened.
+2. **Bid.** Open a sale on [/sales](https://allot.timidan.xyz/sales) and press *Place sealed bid as a guest*. Your browser seals the bid, and a guest account with a registered post-quantum key places it on chain. Then press *Open it from the chain*: the bid's page opens your envelope in your browser with the key in your receipt and checks it against the fingerprint the contract stored. One guest bid per visitor a day.
 3. **Sell.** On [/sell](https://allot.timidan.xyz/sell), upload an image or a song (JPEG, PNG, WebP, MP3, OGG, WAV or M4A, up to 8 MB), and set the shares, the lowest price and the length. Allot issues the shares and runs the sale. A song's waveform becomes its picture.
 4. **Follow any transaction** on its own page, `/tx/<hash>`, read straight from testnet: what it did, its signature, and the post-quantum pass that let it through.
 
@@ -55,7 +55,7 @@ To bid from your own wallet, use QoreX on testnet: the browser extension, or the
 
 1. **The shares.** Each item is a CMTAT token built from QoreChain's Asset Kit, with the kit's holder rule: only accounts with a registered ML-DSA-87 key can hold it. The issuer grants the sale contract the right to mint it.
 2. **The seller's card.** The seller registers an ML-KEM-1024 key on chain and signs a recipient card that binds it to their account with ML-DSA-87. The card is written into the sale when it is created.
-3. **A bid.** The bidder's browser checks the card against the keys registered on chain, then seals `{price, shares, salt}` to it. The contract stores only a fingerprint of the bid and the sealed envelope. Every bid locks the same deposit, so the deposit says nothing about the bid.
+3. **A bid.** The bidder's browser checks that the card belongs to the sale's seller and matches the keys registered on chain. It then seals `{price, shares, salt}`, padded to a fixed size, to two recipients: the seller, and a fresh key kept only in the bidder's receipt. The contract stores only a fingerprint of the bid and the sealed envelope. Every envelope is the same size and every bid locks the same deposit, so neither says anything about the bid. With the receipt, the bidder's browser can open their own bid from the chain at any time.
 4. **Who may bid.** The contract admits a bidder only if QoreChain's PQC key-status precompile (`0x0A02`) shows a registered ML-DSA-87 key. A bid is an EVM transaction, accepted only inside an EVM window the bidder opened with an ML-DSA-87-signed native transaction. Guest windows are scoped to the sale contract and fUSD.
 5. **The close.** The seller opens each envelope, and the contract checks each opened bid against its fingerprint. The best bids win and every winner pays the lowest winning price. Winners' shares are minted to them, and the rest of every deposit comes back. A bid nobody opens loses 10% of its deposit to the bids that were opened. Allot takes 1% of the proceeds.
 
@@ -65,7 +65,8 @@ When a visitor lists an item through /sell, Allot acts as the auction house: its
 
 | Feature | Where | What it does here |
 |---|---|---|
-| QoreSeal, ML-KEM-1024 (hybrid with X25519) | [`web/src/lib/bid.js`](web/src/lib/bid.js) | Seals every bid in the browser to the seller's card |
+| QoreSeal, ML-KEM-1024 (hybrid with X25519), client-side encryption | [`web/src/lib/bid.js`](web/src/lib/bid.js) (`sealBid`) | Seals every bid in the browser to the seller's card and to the bidder's receipt key |
+| Client-side decryption | [`web/src/TxPage.jsx`](web/src/TxPage.jsx), [`web/src/TryAuction.jsx`](web/src/TryAuction.jsx) | Opens your own bid from the chain in your browser with your receipt's key; the practice auction opens all five bids in the browser |
 | Registered recipient keys, ML-DSA-87 key binding | [`server/consign.mjs`](server/consign.mjs) (`setupIssuer`) | Registers the seller's ML-KEM-1024 key and signs its recipient card |
 | Hybrid ML-DSA-87 transactions, PQC key registration with proof of possession | [`server/kit.mjs`](server/kit.mjs), [`server/setup-guests.mjs`](server/setup-guests.mjs) | Registers each account's ML-DSA-87 key with proof of possession; every native transaction after that is signed with ML-DSA-87 as well as ECDSA |
 | EVM windows, scoped | [`server/kit.mjs`](server/kit.mjs) (`ensureWindow`) | Guests' windows let through only the sale contract and fUSD |

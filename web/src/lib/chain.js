@@ -14,11 +14,17 @@ const abi = parseAbi([
 
 // The card a sale's bids are sealed to: the one its issuer published in the sale itself (SaleCreated), which sits in
 // the sale's first block range.
+// The card must name the account that created the sale, or the bid would be sealed to someone else.
 export async function readCard(address, s) {
   const [[from, to]] = await upTo(s.ranges.slice(0, 1));
-  const [e] = await pub.getContractEvents({ address, abi, eventName: "SaleCreated", args: { saleId: BigInt(s.saleId) }, fromBlock: BigInt(from), toBlock: BigInt(to) });
+  const [[e], sale] = await Promise.all([
+    pub.getContractEvents({ address, abi, eventName: "SaleCreated", args: { saleId: BigInt(s.saleId) }, fromBlock: BigInt(from), toBlock: BigInt(to) }),
+    pub.readContract({ address, abi, functionName: "getSale", args: [BigInt(s.saleId)] }),
+  ]);
   if (!e) throw new Error("Couldn't find this sale's sealing key on QoreChain testnet. Try again in a minute.");
-  return JSON.parse(e.args.issuerCard);
+  const card = JSON.parse(e.args.issuerCard);
+  if (card.address !== toQorAddress(sale.issuer)) throw new Error("This sale's sealing key doesn't belong to its seller, so Allot won't seal a bid to it.");
+  return card;
 }
 const dollars = (x) => Number(x) / 1e6; // fUSD has 6 decimals
 

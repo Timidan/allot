@@ -1,14 +1,18 @@
 import { motion, useReducedMotion } from "motion/react";
 import { useRef, useState } from "react";
-import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
+import { generateSealKeys, open, recipientOf, seal as sealTo } from "@qorechain/qoreseal";
 import DigitRoll from "@/components/smoothui/digit-roll";
 import ByteTiles from "./ByteTiles.jsx";
-import { sealBid } from "./lib/bid.js";
-import { SALE_CONTRACT, money, openSale } from "./sale.js";
+import { CHAIN_ID } from "./lib/bid.js";
+import { money, openSale } from "./sale.js";
 
-// A practice auction: the last sale's four real bids, sealed again, with the visitor's bid added. The visitor's
-// bid is sealed for real in this browser with the seller's real key; nothing is sent. End sale settles it the way
-// the contract does: best price first, earlier bid first at equal prices, until the shares run out.
+// A practice auction: the last sale's four real bids plus the visitor's. On "Seal it" this browser makes an
+// ML-KEM-1024 key and seals all five bids to it; on "End the sale" it opens every envelope with that key and
+// settles from what it opened, the way the contract does: best price first, earlier bid first at equal prices,
+// until the shares run out. Nothing is sent.
+const PURPOSE = "allot:practice:v1";
+const sealPractice = (keys, bid) => sealTo({ chainId: CHAIN_ID, purpose: PURPOSE, recipients: [recipientOf(keys)], plaintext: new TextEncoder().encode(JSON.stringify(bid)) });
+const openPractice = (keys, envelope) => JSON.parse(new TextDecoder().decode(open({ chainId: CHAIN_ID, purpose: PURPOSE, envelope, keys })));
 function settle(bids, supply, reserve) {
   const order = [...bids].sort((a, b) => b.price - a.price); // stable, so ties keep bid order
   const filled = new Map();
@@ -38,7 +42,8 @@ const Button = ({ children, quiet, ...p }) => (
 export default function TryAuction({ last, book }) {
   const [price, setPrice] = useState(26);
   const [shares, setShares] = useState(3);
-  const [mine, setMine] = useState(null); // { envelope } once sealed
+  const [mine, setMine] = useState(null); // once sealed: { keys, envelopes: { [bid key]: envelope } }
+  const [opened, setOpened] = useState(null); // after the end: { [bid key]: { price, qty } }, decrypted in this browser
   const [phase, setPhase] = useState("pick"); // pick, sealing, sealed, opening, ended
   const [looking, setLooking] = useState(null); // the bid under the pointer or last tapped
   const [error, setError] = useState("");
@@ -54,14 +59,13 @@ export default function TryAuction({ last, book }) {
   };
   const onShares = (v) => setShares(Math.max(1, Math.min(Math.round(v), supply, Math.floor(deposit / price))));
 
-  const seal = async () => {
+  const seal = () => {
     setError("");
     setPhase("sealing");
     try {
-      const card = await (await fetch("/issuer-card.json")).json();
-      const bidder = privateKeyToAccount(generatePrivateKey()).address; // practice only: nothing is placed
-      const { envelope } = await sealBid({ saleContract: SALE_CONTRACT, saleId: 1, bidder, price: BigInt(price) * 1_000_000n, qty: shares, issuer: card.address, card });
-      setMine({ envelope });
+      const keys = generateSealKeys();
+      const envelopes = Object.fromEntries([...book.map((b) => [b.tx, sealPractice(keys, { price: b.price, qty: b.shares })]), ["you", sealPractice(keys, { price, qty: shares })]]);
+      setMine({ keys, envelopes });
       setPhase("sealed");
     } catch (e) {
       setError(`Sealing failed: ${e.message}`);
@@ -70,6 +74,12 @@ export default function TryAuction({ last, book }) {
   };
   const endSale = () => {
     setLooking(null);
+    try {
+      setOpened(Object.fromEntries(Object.entries(mine.envelopes).map(([k, envelope]) => [k, openPractice(mine.keys, envelope)])));
+    } catch (e) {
+      setError(`Opening failed: ${e.message}`);
+      return;
+    }
     setPhase("opening");
     const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
     setTimeout(() => setPhase("ended"), still ? 0 : 900);
@@ -77,13 +87,16 @@ export default function TryAuction({ last, book }) {
   const replay = () => {
     again.current = true;
     setMine(null);
+    setOpened(null);
     setLooking(null);
     setPhase("pick");
   };
 
+  // Before the end the page knows each bid only by what was typed or published; after it, by what this browser opened.
+  const valueOf = (key, price, qty) => (opened?.[key] ? { price: opened[key].price, qty: opened[key].qty } : { price, qty });
   const bids = [
-    ...book.map((b, i) => ({ key: b.tx, who: NAMES[i] ?? `Bidder ${i + 1}`, price: b.price, qty: b.shares, envelope: b.envelope })),
-    ...(mine ? [{ key: "you", who: "You", price, qty: shares, envelope: mine.envelope, mine: true }] : []),
+    ...book.map((b, i) => ({ key: b.tx, who: NAMES[i] ?? `Bidder ${i + 1}`, ...valueOf(b.tx, b.price, b.shares), envelope: mine?.envelopes[b.tx] ?? b.envelope })),
+    ...(mine ? [{ key: "you", who: "You", ...valueOf("you", price, shares), envelope: mine.envelopes.you, mine: true }] : []),
   ];
   const result = settle(bids, supply, reserve);
   const rows = phase === "ended" ? result.order : bids;
@@ -103,13 +116,15 @@ export default function TryAuction({ last, book }) {
           </div>
           <div className="mt-5 flex flex-wrap items-center gap-4">
             <Button autoFocus={again.current} disabled={phase === "sealing"} onClick={seal}>{phase === "sealing" ? "Sealing…" : "Seal it"}</Button>
-            <span className="text-[15px] text-muted-foreground">Practice only. Nothing is sent.</span>
+            <span className="text-[15px] text-muted-foreground">Practice: nothing is sent. Each bid locks a {deposit} fUSD deposit, so price × shares stays within it.</span>
           </div>
           {error ? <p className="mt-3 text-[15px] text-destructive" role="alert">{error}</p> : null}
         </div>
       ) : (
         <p className="max-w-[46ch] text-[18px]">
-          {phase === "ended" ? "Time's up. Every bid is open, and the 10 shares go to the top bids." : "Sealed. No one can see it. Hover or tap any bid."}
+          {phase === "ended"
+            ? `Time's up. Your browser opened all five envelopes with its key, and the ${supply} shares go to the top bids.`
+            : "Your browser made an ML-KEM-1024 key and sealed all five bids to it. Nobody can read them until the sale ends. Hover or tap any bid."}
         </p>
       )}
 
@@ -145,7 +160,7 @@ export default function TryAuction({ last, book }) {
                       <span className="relative block">
                         <ByteTiles bytes={b.envelope} label={b.mine ? "Your sealed bid" : "A sealed bid"} maxCols={150} pose={phase === "opening" || (b.mine && seen)} text={`${b.qty} × ${b.price} fUSD`} tile={3} />
                         {seen && !b.mine && phase === "sealed" ? (
-                          <span className="absolute inset-0 flex items-center justify-center bg-background/85 px-2 text-center text-[15px]">Sealed. Only the seller holds the key.</span>
+                          <span className="absolute inset-0 flex items-center justify-center bg-background/85 px-2 text-center text-[15px]">Sealed. It opens when the sale ends.</span>
                         ) : null}
                       </span>
                     )}

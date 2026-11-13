@@ -167,12 +167,12 @@ function BidBox({ sale, entry, onPlaced }) {
         content: receipt ? (
           <div className="space-y-3 text-[16px]">
             <p className="font-semibold">Placed: {shares} shares at {price} fUSD, sealed.</p>
-            <p className="text-muted-foreground">{own ? "From your QoreX account" : "Guest"} {short(guest)}. Only {reader(entry.lot)} can read it until the sale ends.</p>
+            <p className="text-muted-foreground">{own ? "From your QoreX account" : "Guest"} {short(guest)}. Until the sale ends, only you and {entry.lot.consigned ? "Allot, which runs it," : "the seller"} can read it.</p>
             <p className="flex flex-wrap gap-x-5 gap-y-2">
-              <Tx hash={receipt.tx} label="View on QoreChain" />
+              <Tx hash={receipt.tx} label="Open it from the chain" />
               <button className="underline underline-offset-4" onClick={() => download(receipt)} type="button">Download receipt</button>
             </p>
-            <p className="text-[14px] text-muted-foreground">Keep the receipt: it proves your bid when it opens.</p>
+            <p className="text-[14px] text-muted-foreground">Keep the receipt: it holds the key that opens your bid in this browser, and proves your bid when the sale ends.</p>
           </div>
         ) : null,
       },
