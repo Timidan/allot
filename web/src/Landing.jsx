@@ -223,7 +223,7 @@ export default function Landing() {
       </main>
 
       {/* One flat row. The own-wallet help lives on the sale page, where bids are placed. */}
-      <footer className="flex flex-wrap items-baseline gap-x-8 gap-y-2 border-t border-foreground/10 px-6 py-8 text-[14px] text-muted-foreground md:px-12">
+      <footer className="flex flex-wrap items-baseline gap-x-6 gap-y-2 border-t border-foreground/10 px-6 py-8 text-[14px] text-muted-foreground md:px-12">
         <span className="flex items-center gap-2 self-center font-sans text-[15px] font-semibold text-foreground"><Mark />Allot</span>
         <span>QoreChain testnet</span>
         <span>Sale contract {short(SALE_CONTRACT)}</span>
@@ -231,7 +231,8 @@ export default function Landing() {
           Photo: <a className={link} href={painting.source} rel="noreferrer" target="_blank">Ángel M. Felicísimo</a>,{" "}
           <a className={link} href="https://creativecommons.org/licenses/by/2.0/" rel="noreferrer" target="_blank">CC BY 2.0</a>
         </span>
-        <span>No cookies or analytics; IPs held in memory only</span>
+        {/* Cloudflare, which serves the site, adds its cookie-free visit counter; the server keeps IPs in memory only. */}
+        <span>No cookies; Cloudflare counts visits; IPs kept in memory</span>
       </footer>
     </div>
   );
