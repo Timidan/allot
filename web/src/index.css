@@ -1,0 +1,41 @@
+@import "tailwindcss";
+
+/* Light by default: warm paper, ink, and an ochre accent from the straw hat in the painting.
+   Dark mode is the night sea, after the painting's blues, with a cobalt accent. The switch sets
+   data-theme="dark" on <html>; index.html applies the saved choice before the page draws. */
+@theme {
+  --font-sans: "Schibsted Grotesk", system-ui, sans-serif;
+  --font-serif: "Bodoni Moda", Didot, serif;
+  --font-mono: "Fragment Mono", ui-monospace, monospace;
+  --color-background: #f5f2ec;
+  --color-foreground: #1c1a16;
+  --color-muted: #ebe7df;
+  --color-muted-foreground: #66615a;
+  --color-primary: #1c1a16;
+  --color-primary-foreground: #f5f2ec;
+  --color-border: #dcd6cb;
+  --color-ring: #94601a;
+  --color-destructive: #a3341f;
+  --color-accent: #94601a;
+}
+
+:root[data-theme="dark"] {
+  --color-background: #05070e;
+  --color-foreground: #e9edf5;
+  --color-muted: #0c1120;
+  --color-muted-foreground: #8d95a8;
+  --color-primary: #e9edf5;
+  --color-primary-foreground: #05070e;
+  --color-border: #1d2436;
+  --color-ring: #6f9bf0;
+  --color-destructive: #f08a74;
+  --color-accent: #6f9bf0;
+  color-scheme: dark;
+}
+
+body {
+  background: var(--color-background);
+  color: var(--color-foreground);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}

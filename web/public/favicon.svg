@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
+  <style>rect{stroke:#1c1a16;fill:none}.f{fill:#1c1a16}@media (prefers-color-scheme:dark){rect{stroke:#e9edf5}.f{fill:#e9edf5}}</style>
+  <rect class="f" height="7" width="7" x="0.5" y="0.5" />
+  <rect height="6" width="6" x="9" y="1" />
+  <rect height="6" width="6" x="1" y="9" />
+  <rect height="6" width="6" x="9" y="9" />
+</svg>

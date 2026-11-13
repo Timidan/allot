@@ -1,0 +1,19 @@
+{
+  "name": "allot-guest",
+  "private": true,
+  "type": "module",
+  "description": "Allot's server: guest bids for visitors without a wallet, listings, and the keeper that settles listed sales.",
+  "engines": { "node": ">=22.9" },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env guest.mjs",
+    "setup": "node --env-file-if-exists=.env setup-guests.mjs"
+  },
+  "dependencies": {
+    "@cosmjs/stargate": "0.39.0",
+    "@qorechain/evm": "0.13.0",
+    "@qorechain/qoreseal": "0.1.0",
+    "@qorechain/sdk": "0.13.0",
+    "cosmjs-types": "0.11.0",
+    "viem": "2.57.18"
+  }
+}
