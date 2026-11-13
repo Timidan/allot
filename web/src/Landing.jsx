@@ -169,7 +169,7 @@ export default function Landing() {
                 Bid without being seen.<br />Even after Q&#8209;Day.
               </h1>
               <p className="mt-6 max-w-[44ch] text-pretty text-[17px] leading-normal text-foreground/80 md:text-[19px]">
-                Allot is a secret-bid marketplace on QoreChain for shares of real things: art, property, a fund. Each bid is sealed with post-quantum encryption, so no other bidder can read it, today or after Q&#8209;Day. When time runs out, the best bids win and every winner pays the same price.
+                Allot is a secret-bid marketplace on QoreChain for shares of real things: art, a song, a fund. Each bid is sealed in your browser with post-quantum encryption (ML&#8209;KEM&#8209;1024), so no other bidder can read it before the sale ends, not even with a quantum computer. When time runs out, every bid is opened on chain, the best bids win, and every winner pays the same price.
               </p>
             </div>
           </div>
@@ -193,7 +193,7 @@ export default function Landing() {
           <>
             <Sub>Bids stay sealed for days. QoreChain seals them with post-quantum encryption, so even a quantum computer can't open them early.</Sub>
             <Sub>
-              The usual seal is drawn for comparison. The QoreChain seal is Ana's real bid.{" "}
+              The usual seal is drawn for comparison. The QoreChain seal is the envelope of Ana's real bid. That sale has ended, so its seller has opened her bid on chain; the envelope itself still can't be broken.{" "}
               {book?.[0] ? <a aria-label="See it: Ana's bid on QoreChain testnet" className={link} href={`/tx/${book[0].tx}`}>See it →</a> : null}
             </Sub>
           </>

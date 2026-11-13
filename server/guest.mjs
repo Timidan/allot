@@ -8,7 +8,7 @@ import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync, mkdirSync, existsSync, createReadStream } from "node:fs";
 import http from "node:http";
 import { decodeEventLog } from "viem";
-import { bidsOf, createListing, finish, setupIssuer } from "./consign.mjs";
+import { bidsOf, checkBid, createListing, finish, setupIssuer } from "./consign.mjs";
 import { FUSD, SALE, makeKit, pub, sale } from "./kit.mjs";
 
 const ISSUER = "0xCc7BfdE6Ed012e6E90B32D01979B87e34Ac00464"; // the treasury issuer of the sample sales
@@ -79,9 +79,19 @@ async function place({ saleId, guest, fingerprint, envelope }, visitor) {
   if (!/^0x[0-9a-fA-F]+$/.test(envelope ?? "") || (envelope.length - 2) / 2 > MAX_ENVELOPE) throw Object.assign(new Error("Bad envelope."), { status: 400 });
   const g = guests.find((x) => x.evm.toLowerCase() === String(guest).toLowerCase());
   const h = g && held.get(g.evm);
-  if (!h || h.visitor !== visitor || h.until < Date.now()) throw Object.assign(new Error("That guest isn't yours. Start the bid again."), { status: 409 });
-  await openSale(saleId);
+  const notYours = () => Object.assign(new Error("That guest isn't yours. Start the bid again."), { status: 409 });
+  if (!h || h.visitor !== visitor || h.until < Date.now()) throw notYours();
+  const s = await openSale(saleId);
+  // In a sale Allot runs, the server holds the opening key: refuse a bid that could never be opened, so it can't
+  // hold up the sale's settlement until the opening deadline.
+  if (s.issuer.toLowerCase() === consignor.evm.toLowerCase()) {
+    const bid = checkBid((await readyIssuer()).keys, saleId, g.evm, fingerprint, envelope, s.deposit);
+    if (bid.why) throw Object.assign(new Error(`This bid can't be placed: ${bid.why}.`), { status: 400 });
+  }
   return serial(g.evm, async () => {
+    // Checked again in the queue: two requests racing on one hold must not both place a bid.
+    const now = held.get(g.evm);
+    if (!now || now.visitor !== visitor) throw notYours();
     const windowTx = await kit.ensureWindow(g, [SALE, FUSD]);
     const args = [BigInt(saleId), fingerprint, envelope];
     await pub.simulateContract({ ...sale, functionName: "placeBid", args, account: g.evm });
@@ -154,10 +164,21 @@ async function consign(req, q, visitor) {
   const now = Date.now();
   if (now - (lastListing.get(visitor) ?? 0) < PER_VISITOR) throw Object.assign(new Error("One listing per visitor a day."), { status: 429 });
   if (listings.filter((l) => now - l.createdAt < PER_VISITOR).length >= PER_DAY) throw Object.assign(new Error("Allot has taken today's 20 listings. Try again tomorrow."), { status: 429 });
-  const file = await raw(req);
-  const k = kindOf(file);
-  if (!k) throw Object.assign(new Error("Upload a JPEG, PNG or WebP image, or an MP3, OGG, WAV or M4A song."), { status: 415 });
-  lastListing.set(visitor, now); // counted from here, so a failed chain step still uses the day's listing
+  // The day's listing is reserved before the upload is read, so two uploads racing can't both pass the limit.
+  // A file that isn't an image or a song gives it back; a failed chain step still uses it.
+  lastListing.set(visitor, now);
+  let file, k;
+  try {
+    file = await raw(req);
+    k = kindOf(file);
+  } catch (e) {
+    lastListing.delete(visitor);
+    throw e;
+  }
+  if (!k) {
+    lastListing.delete(visitor);
+    throw Object.assign(new Error("Upload a JPEG, PNG or WebP image, or an MP3, OGG, WAV or M4A song."), { status: 415 });
+  }
   const sha256 = createHash("sha256").update(file).digest("hex");
   const name = `${sha256}.${k.ext}`;
   if (!existsSync(`${FILES}/${name}`)) writeFileSync(`${FILES}/${name}`, file);
@@ -200,7 +221,10 @@ const body = (req) =>
     let s = "";
     req.on("data", (c) => {
       s += c;
-      if (s.length > 16_384) reject(Object.assign(new Error("Too large."), { status: 413 }));
+      if (s.length > 16_384) {
+        reject(Object.assign(new Error("Too large."), { status: 413 }));
+        req.destroy(); // stop reading: an oversized body is not buffered further
+      }
     });
     req.on("end", () => {
       try { resolve(JSON.parse(s || "{}")); } catch { reject(Object.assign(new Error("Bad JSON."), { status: 400 })); }

@@ -25,7 +25,7 @@ A secret-bid marketplace on QoreChain testnet. Every bid is sealed with post-qua
 
 ![Allot's home page: the headline, and the sale of Walk on the Beach](docs/featured.png)
 
-Allot sells shares of real things (a painting, a song, a fund) by sealed bid. A bid is sealed in the bidder's browser with ML-KEM-1024 to the seller's registered key, so no other bidder can read it, today or after a quantum computer can break today's encryption. When time runs out, the bids are opened on chain, the best bids win, and every winner pays the same price.
+Allot sells shares of real things (a painting, a song, a fund) by sealed bid. A bid is sealed in the bidder's browser with ML-KEM-1024 to the seller's registered key, so no other bidder can read it before the sale ends, not even with a quantum computer. When time runs out, every bid is opened on chain, the best bids win, and every winner pays the same price.
 
 Sale 1, ten shares of *Walk on the Beach*, ran on testnet with four sealed bids. Nobody else could read them until the close. Then the seller opened all four in [one transaction](https://allot.timidan.xyz/tx/0x584953b2ad1710f8d3438f837056a3bcf19d4c5688fc3060a85883ebf0a832ba), the contract checked each against its fingerprint, and the sale cleared at 24 fUSD:
 
@@ -36,7 +36,7 @@ Sale 1, ten shares of *Walk on the Beach*, ran on testnet with four sealed bids.
 | 4 shares at 24 fUSD | 3 | 72 fUSD | 28 fUSD |
 | 5 shares at 20 fUSD | 0 | — | 100 fUSD |
 
-Every bid, opening and claim is on [the sale's page](https://allot.timidan.xyz/sales/1). Sale 7 is a song listed by a visitor through [/sell](https://allot.timidan.xyz/sell). After its close the keeper settled it with no one stepping in: it [opened the guest's bid](https://allot.timidan.xyz/tx/0x79b75428c3d754cacd069df733736a50d26287466916763f72aeb2db3ac63e4c), [settled](https://allot.timidan.xyz/tx/0xd40c269ce494f2a05667b2148e752aeea5de5b416de7e761b3c6cc12813554c7), [delivered the 3 shares](https://allot.timidan.xyz/tx/0xfff2acaef33ad54ce9b188d5d29f57d1e316da64fae89ec44f57fd874de54faf) and [paid the proceeds](https://allot.timidan.xyz/tx/0x1ae5855ee435e7a9a044a5b01055aebf02e56bafd7891fcad2368e0fe8d7a280).
+Every bid, opening and claim is on [the sale's page](https://allot.timidan.xyz/sales/1). Sale 7 is a demo song, listed through [/sell](https://allot.timidan.xyz/sell) like any visitor's item. After its close the keeper settled it with no one stepping in: it [opened the guest's bid](https://allot.timidan.xyz/tx/0x79b75428c3d754cacd069df733736a50d26287466916763f72aeb2db3ac63e4c), [settled](https://allot.timidan.xyz/tx/0xd40c269ce494f2a05667b2148e752aeea5de5b416de7e761b3c6cc12813554c7), [delivered the 3 shares](https://allot.timidan.xyz/tx/0xfff2acaef33ad54ce9b188d5d29f57d1e316da64fae89ec44f57fd874de54faf) and [paid the proceeds](https://allot.timidan.xyz/tx/0x1ae5855ee435e7a9a044a5b01055aebf02e56bafd7891fcad2368e0fe8d7a280).
 
 Built for QoreChain's *Build Before Q-Day* developer fest, category Encrypted Apps.
 
@@ -89,6 +89,7 @@ Kits: `@qorechain/sdk`, `@qorechain/qoreseal`, `@qorechain/evm` and `@qorechain/
 
 ## Limits
 
+- **Bids are private until the close, not for ever.** When the sale ends, every bid's price and shares are published on chain as it is opened.
 - **The seller can read bids before the close.** Bids are sealed to the seller, or to Allot for listed items, and QoreSeal has no timed release. Other bidders and outsiders cannot read them.
 - **A bid's own signature is ECDSA.** It is admitted only inside a window opened with ML-DSA-87, but the bid transaction itself is not ML-DSA-signed.
 - **Bidding from QoreX** has not been tested with a real wallet, and QoreX's mobile app may not yet send EVM transactions.

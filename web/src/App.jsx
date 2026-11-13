@@ -2,7 +2,6 @@ import { Fragment, useEffect, useState } from "react";
 import { toHex } from "viem";
 import AnimatedStepper from "@/components/smoothui/animated-stepper";
 import DigitRoll from "@/components/smoothui/digit-roll";
-import PriceFlow from "@/components/smoothui/price-flow";
 import Countdown from "./Countdown.jsx";
 import { Mark } from "./Landing.jsx";
 import { sealBid } from "./lib/bid.js";
@@ -94,10 +93,12 @@ function BidBox({ sale, entry, onPlaced }) {
   // The order matters: the fingerprint names the bidder, so the guest comes first, then the seal, then the placing.
   const place = async () => {
     setError("");
+    setNote("Getting a guest account…");
     setStep(0);
     try {
       const { guest: bidder } = await api(`/api/guest?sale=${saleId}`);
       setGuest(bidder);
+      setNote(`Sealing ${shares} shares at ${price} fUSD…`);
       const card = await readCard(SALE_CONTRACT, entry);
       const sealed = await sealBid({ saleContract: SALE_CONTRACT, saleId: saleId, bidder, price: BigInt(price) * DOLLAR, qty: shares, issuer: card.address, card });
       setBytes(sealed.envelope.length);
@@ -153,7 +154,7 @@ function BidBox({ sale, entry, onPlaced }) {
 
   if (step >= 0) {
     const steps = [
-      { label: "Seal", content: <p className="text-[16px] text-muted-foreground">{own ? note : `Sealing ${shares} shares at ${price} fUSD…`}</p> },
+      { label: "Seal", content: <p className="text-[16px] text-muted-foreground">{note}</p> },
       {
         label: "Place",
         content: (
@@ -203,7 +204,9 @@ function BidBox({ sale, entry, onPlaced }) {
         Bid from my QoreX wallet
       </button>
       {error ? <p className="mt-3 text-[15px] text-destructive" role="alert">{error}</p> : null}
-      <p className="mt-3 text-[15px] text-muted-foreground">Hidden from other bidders. Only {reader(entry.lot)} can read it.</p>
+      <p className="mt-3 text-[15px] text-muted-foreground">
+        Sealed in your browser with ML-KEM-1024 to {entry.lot.consigned ? "Allot's" : "the seller's"} registered key, <span className="font-mono text-[14px]" title={sale.issuer}>{short(sale.issuer)}</span>, and to a key in your receipt. Other bidders can't read it; {entry.lot.consigned ? "Allot, which runs this sale," : "the seller"} can.
+      </p>
       <TestnetHelp />
     </div>
   );
@@ -220,7 +223,7 @@ const Tx = ({ hash, label }) =>
 function SealedBids({ book, lot }) {
   return (
     <section>
-      <p className="text-[16px] text-muted-foreground">Only {reader(lot)} can read them. Opened after the sale ends.</p>
+      <p className="text-[16px] text-muted-foreground">Sealed with ML-KEM-1024. Until they're opened on chain after the sale ends, only {reader(lot)} and each bid's own bidder can read them.</p>
       <ul className="mt-4 border-t border-border font-mono text-[14px]">
         {book.map((b) => (
           <li className="grid grid-cols-[1fr_auto] items-center gap-x-4 gap-y-1 border-b border-border py-2.5 sm:grid-cols-[8rem_1fr_auto]" key={b.tx}>
@@ -242,7 +245,7 @@ function AllBids({ sale, book }) {
   return (
     <section>
       <p className="text-[16px] text-muted-foreground">
-        {book.length} bids, all opened and checked. {sale.sold} of {sale.supply} shares sold at <b className="font-semibold text-foreground">{money(sale.clearing)}</b>.
+        {book.filter((b) => b.price != null).length} of {book.length} {book.length === 1 ? "bid" : "bids"} opened and checked against their fingerprints. {sale.sold} of {sale.supply} shares sold at <b className="font-semibold text-foreground">{money(sale.clearing)}</b>.
       </p>
       <table className="mt-4 w-full border-collapse text-[15px] tabular-nums">
         <thead>
@@ -260,7 +263,7 @@ function AllBids({ sale, book }) {
                 <td className="pt-3 font-mono text-[14px]">{short(b.bidder)}</td>
                 <td className="pt-3 text-right">{b.shares} at {b.price} fUSD</td>
                 <td className={`pt-3 text-right ${b.won ? "font-semibold" : "text-muted-foreground"}`}>{b.won || "None"}</td>
-                <td className="pt-3 text-right">{money(b.refund)}</td>
+                <td className="pt-3 text-right">{b.refund == null ? "Not yet" : money(b.refund)}</td>
               </tr>
               <tr>
                 <td className="border-b border-border pb-3 pt-1 font-mono text-[13px]" colSpan={4}>
@@ -396,10 +399,10 @@ function ResultPage({ last, book, lot }) {
       </div>
       <h1 className="text-[44px] font-semibold leading-none tracking-tight">You won {b.won} shares</h1>
       <p className="mb-6 mt-3 text-[17px] text-muted-foreground">
-        Every winner paid <span className="inline-flex font-semibold text-foreground"><PriceFlow value={last.clearing} />&nbsp;fUSD</span> a share.
+        Every winner paid <b className="font-semibold text-foreground">{money(last.clearing)}</b> a share.
       </p>
       <dl className="mb-6 border-t border-border tabular-nums">
-        {[["You bid", `${b.shares} at ${money(b.price)}`], ["You paid", money(last.clearing * b.won)], ["Back to you", money(b.refund)]].map(([k, v]) => (
+        {[["You bid", `${b.shares} at ${money(b.price)}`], ["You paid", money(last.clearing * b.won)], ["Back to you", b.refund == null ? "Not yet" : money(b.refund)]].map(([k, v]) => (
           <div className="flex justify-between border-b border-border py-3.5 text-base" key={k}><dt className="text-muted-foreground">{k}</dt><dd className="m-0 font-semibold">{v}</dd></div>
         ))}
       </dl>
@@ -444,8 +447,10 @@ export function Gallery() {
     for (const e of sales) if (!(e.saleId in found)) readSale(SALE_CONTRACT, e.saleId).then((s) => setFound((f) => ({ ...f, [e.saleId]: s })), (x) => setError(readError(x)));
   }, [sales.length]); // eslint-disable-line react-hooks/exhaustive-deps
   const listed = sales.map((e) => ({ ...e, sale: found[e.saleId] }));
-  const live = listed.filter((e) => !e.sale || !isOver(e.sale));
+  // A sale shows once it has been read, so an ended one never flashes up under "Open for bids".
+  const live = listed.filter((e) => e.sale && !isOver(e.sale));
   const ended = listed.filter((e) => e.sale && isOver(e.sale));
+  const reading = !error && listed.some((e) => !e.sale);
   return (
     <>
       <SiteHeader />
@@ -454,6 +459,7 @@ export function Gallery() {
         <p className="mt-2 text-[18px] text-muted-foreground">Shares in real things, sold by sealed bid. Testnet samples. <a className="text-accent underline underline-offset-4 hover:decoration-2" href="/sell">Sell your own →</a></p>
         <TestnetHelp className="mt-3 max-w-[70ch]" />
         {error ? <p className="mt-4 text-[15px] text-destructive" role="alert">{error}</p> : null}
+        {reading && !live.length ? <p className="mt-14 text-[17px] text-muted-foreground">Reading the sales from QoreChain testnet…</p> : null}
         {live.length ? (
           <section className="mt-14">
             <h2 className="border-b border-border pb-3 text-[20px] font-semibold">Open for bids</h2>

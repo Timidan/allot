@@ -1,0 +1,9 @@
+CMTATStandalone.json is the compiled ABI and bytecode of CMTAT (the Capital Markets and Technology
+Association's token for tokenised securities), as built by QoreChain's Asset Kit. Allot deploys it, unmodified,
+for each listed item.
+
+CMTAT is licensed under the Mozilla Public License 2.0 (https://mozilla.org/MPL/2.0/).
+Source: https://github.com/CMTA/CMTAT
+Asset Kit: https://github.com/qorechain/qorechain-asset-kit
+
+The rest of this repository is licensed under Apache-2.0 (see LICENSE).

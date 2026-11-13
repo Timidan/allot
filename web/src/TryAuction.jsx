@@ -187,7 +187,9 @@ export default function TryAuction({ last, book }) {
                 </p>
                 <p className="mt-3 max-w-[40ch] text-[18px]">Everyone pays {money(result.clearing)}, the lowest winning price.</p>
                 <p className="mt-1 text-[17px] text-muted-foreground">
-                  {you ? `You won ${you}: paid ${money(you * result.clearing)}, ${money(deposit - you * result.clearing)} back.` : `You won none, so your ${money(deposit)} deposit comes back.`}
+                  {you
+                    ? `You bid ${money(price)} a share but pay the clearing price like every winner: ${you} × ${money(result.clearing)} = ${money(you * result.clearing)}, and ${money(deposit - you * result.clearing)} of your ${money(deposit)} deposit comes back.`
+                    : `You won none, so your ${money(deposit)} deposit comes back.`}
                 </p>
                 <p className="mt-4 text-[16px] text-muted-foreground">{NAMES.slice(0, book.length).join(", ").replace(/, ([^,]*)$/, " and $1")}'s bids are real: this painting's last sale.</p>
               </div>

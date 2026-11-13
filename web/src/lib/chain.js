@@ -35,6 +35,7 @@ export async function readSale(address, saleId) {
     pub.readContract({ address, abi, functionName: "bidCount", args: [id] }),
   ]);
   return {
+    issuer: toQorAddress(s.issuer), // the seller, whose registered key every bid is sealed to
     supply: Number(s.supply), reserve: dollars(s.reserve), deposit: dollars(s.deposit), closeAt: Number(s.closeAt) * 1000,
     settled: s.settled, clearing: dollars(s.clearing), sold: Number(s.sold), bids: Number(n), opened: s.opened,
   };

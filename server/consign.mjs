@@ -33,6 +33,22 @@ const purpose = (saleId) => `allot:bid:v1:${SALE.toLowerCase()}:${saleId}`;
 const fingerprintOf = (saleId, bidder, price, qty, salt) =>
   keccak256(encodeAbiParameters([{ type: "uint256" }, { type: "address" }, { type: "uint128" }, { type: "uint128" }, { type: "bytes32" }], [BigInt(saleId), bidder, BigInt(price), BigInt(qty), salt]));
 
+// Opens one sealed bid with the issuer's keys and checks it the way the contract will at opening. Returns the bid,
+// or null with the reason in `why` when it could never be opened (so the keeper skips it and the guest server
+// refuses to place it).
+export function checkBid(keys, saleId, bidder, fingerprint, envelopeHex, deposit) {
+  let bid;
+  try {
+    bid = JSON.parse(new TextDecoder().decode(open({ chainId: CHAIN_ID, purpose: purpose(saleId), envelope: hexToBytes(envelopeHex), keys })));
+  } catch (x) {
+    return { why: `it can't be opened (${x.message})` };
+  }
+  const fits = BigInt(bid.price) > 0n && BigInt(bid.qty) > 0n && BigInt(bid.price) * BigInt(bid.qty) <= BigInt(deposit);
+  if (!fits) return { why: "price × shares exceeds the deposit" };
+  if (fingerprintOf(saleId, bidder, bid.price, bid.qty, bid.salt) !== fingerprint) return { why: "it doesn't match its fingerprint" };
+  return { price: BigInt(bid.price), qty: BigInt(bid.qty), salt: bid.salt };
+}
+
 // Readies the issuer once: its ML-DSA-87 key, its encryption key, and the card bidders seal to. Returns the card.
 export async function setupIssuer(kit, a, mnemonic, log = () => {}) {
   if (!(await pub.readContract({ ...sale, functionName: "isHybridHolder", args: [a.evm] }))) {
@@ -88,31 +104,30 @@ export async function finish(kit, a, keys, listing, log = () => {}) {
   const now = (await pub.getBlock()).timestamp;
   if (now < s.closeAt) return false;
   const placed = await bidsOf(id, listing.createBlock);
+  // The blocks of the sale's bids and of the keeper's own transactions, so the page can find every event even when
+  // the opening and claims land long after the sale's first 10,000 blocks.
   listing.bidBlocks = placed.map((e) => Number(e.blockNumber));
+  const note = (rc) => listing.bidBlocks.push(Number(rc.blockNumber));
   const state = await Promise.all(placed.map((e) => pub.readContract({ ...sale, functionName: "bids", args: [id, e.args.bidIndex] })));
   await kit.ensureWindow(a);
   if (!s.settled && now < s.openBy) {
     const opened = [];
     for (const [i, { args: e }] of placed.entries()) {
       if (state[i][5]) continue; // already opened
-      try {
-        const o = open({ chainId: CHAIN_ID, purpose: purpose(id), envelope: hexToBytes(e.envelope), keys });
-        const bid = JSON.parse(new TextDecoder().decode(o.plaintext ?? o));
-        const fits = BigInt(bid.price) > 0n && BigInt(bid.qty) > 0n && BigInt(bid.price) * BigInt(bid.qty) <= s.deposit;
-        if (fits && fingerprintOf(id, e.bidder, bid.price, bid.qty, bid.salt) === e.fingerprint) opened.push({ index: e.bidIndex, price: BigInt(bid.price), qty: BigInt(bid.qty), salt: bid.salt });
-        else log(`sale ${id} bid ${e.bidIndex}: doesn't match its fingerprint or exceeds the deposit; left unopened`);
-      } catch (x) {
-        log(`sale ${id} bid ${e.bidIndex}: can't be opened (${x.message}); left unopened`);
-      }
+      const bid = checkBid(keys, id, e.bidder, e.fingerprint, e.envelope, s.deposit);
+      if (bid.why) log(`sale ${id} bid ${e.bidIndex}: left unopened, ${bid.why}`);
+      else opened.push({ index: e.bidIndex, ...bid });
     }
     if (opened.length) {
       const rc = await kit.evm(a, { ...sale, functionName: "openBids", args: [id, opened.map((o) => o.index), opened.map((o) => o.price), opened.map((o) => o.qty), opened.map((o) => o.salt)] });
+      note(rc);
       log(`sale ${id}: opened ${opened.length} bids, tx ${rc.transactionHash}`);
     }
   }
   if (!s.settled) {
     try {
       const rc = await kit.evm(a, { ...sale, functionName: "settle", args: [id] });
+      note(rc);
       log(`sale ${id}: settled, tx ${rc.transactionHash}`);
     } catch (x) {
       log(`sale ${id}: can't settle yet (${x.shortMessage ?? x.message})`); // some bid is unopened: settle waits for openBy
@@ -122,11 +137,13 @@ export async function finish(kit, a, keys, listing, log = () => {}) {
   for (const [i, { args: e }] of placed.entries()) {
     if ((await pub.readContract({ ...sale, functionName: "bids", args: [id, e.bidIndex] }))[6]) continue; // claimed
     const rc = await kit.evm(a, { ...sale, functionName: "claim", args: [id, e.bidIndex] });
+    note(rc);
     log(`sale ${id}: claimed bid ${e.bidIndex}, tx ${rc.transactionHash}`);
   }
   s = await pub.readContract({ ...sale, functionName: "getSale", args: [id] });
   if (s.earned > s.paid) {
     const rc = await kit.evm(a, { ...sale, functionName: "payProceeds", args: [id] });
+    note(rc);
     log(`sale ${id}: proceeds paid, tx ${rc.transactionHash}`);
   }
   return true;

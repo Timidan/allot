@@ -86,7 +86,7 @@ export default function TxPage({ hash }) {
           <dl className="mt-8 border-t border-border">
             <Row label="Status">{t.ok ? "Succeeded" : "Failed"}, block {t.block.toLocaleString()}, {when(t.time)}</Row>
             {t.evm ? <Row label="From → to">{who(t.from)} → {who(t.to)}</Row> : <Row label="Sent by">{short(t.from ?? "")}</Row>}
-            {placed ? <Row label="Inside">Sealed with ML-KEM-1024: {((placed.args.envelope.length - 2) / 2).toLocaleString()} bytes. The price and shares stay hidden until the sale ends.</Row> : null}
+            {placed ? <Row label="Inside">Sealed with ML-KEM-1024: {((placed.args.envelope.length - 2) / 2).toLocaleString()} bytes. The price and shares stay hidden until the seller opens it after the sale ends.</Row> : null}
             {placed && receiptFor(hash) ? <Row label="Your bid"><YourBid placed={placed} receipt={receiptFor(hash)} /></Row> : null}
             {opened.length ? <Row label="Opened">{opened.map((e) => `${e.args.qty} at ${money(e.args.price)}`).join(", ")}</Row> : null}
             {claimed ? <Row label="Paid out">{String(claimed.args.assetAmount)} shares, {money(claimed.args.refund)} back</Row> : null}
