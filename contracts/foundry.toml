@@ -3,6 +3,7 @@ src = "src"
 test = "test"
 out = "out"
 solc_version = "0.8.28"
+remappings = ["@qorechain/asset-kit/=lib/qorechain-asset-kit/contracts/src/"]
 # The QoreChain EVM Engine has Shanghai, Cancun and Prague active (Osaka is not).
 evm_version = "cancun"
 optimizer = true

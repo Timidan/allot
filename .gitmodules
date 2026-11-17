@@ -1,0 +1,3 @@
+[submodule "contracts/lib/qorechain-asset-kit"]
+	path = contracts/lib/qorechain-asset-kit
+	url = https://github.com/qorechain/qorechain-asset-kit

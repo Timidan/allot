@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 pragma solidity 0.8.28;
 
+// The Asset Kit's interface to QoreChain's pqcKeyStatus precompile at 0x0A02 (testnet only).
+import {IQorePqcKeyStatus} from "@qorechain/asset-kit/interfaces/IQorePqcKeyStatus.sol";
+
 interface IERC20 {
     function transfer(address to, uint256 value) external returns (bool);
     function transferFrom(address from, address to, uint256 value) external returns (bool);
@@ -11,11 +14,6 @@ interface IMintableAsset {
     function mint(address account, uint256 value) external;
     function decimals() external view returns (uint8);
     function hasRole(bytes32 role, address account) external view returns (bool);
-}
-
-/// QoreChain precompile at 0x0A02 (testnet only).
-interface IPqcKeyStatus {
-    function pqcKeyStatus(address account) external view returns (bool, uint8, bytes memory, bool);
 }
 
 /// Sealed-bid, uniform-price sale of a tokenised asset.
@@ -255,7 +253,7 @@ contract SealedSale {
     /// True when `account` has a registered ML-DSA-87 key with proof of possession. Fails closed.
     function isHybridHolder(address account) public view returns (bool) {
         (bool ok, bytes memory ret) =
-            PQC_KEY_STATUS.staticcall(abi.encodeCall(IPqcKeyStatus.pqcKeyStatus, (account)));
+            PQC_KEY_STATUS.staticcall(abi.encodeCall(IQorePqcKeyStatus.pqcKeyStatus, (account)));
         if (!ok || ret.length < 160) return false;
         (bool registered, uint8 algorithm,, bool proven) = abi.decode(ret, (bool, uint8, bytes, bool));
         return registered && algorithm == ML_DSA_87 && proven;
