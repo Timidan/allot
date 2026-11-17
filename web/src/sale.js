@@ -20,7 +20,7 @@ export const SALE_CONTRACT = "0x284b10c4760794d25c71dc90183c3dc9b6d1f42a";
 // its events fall in. ponytail: hand-kept; add a range whenever a sale gets new bids, its opening or its claims.
 // The sample sales, newest first (listed sales come from the server). `lot` is what is sold.
 export const SALES = [
-  { saleId: 2, lot: painting, ranges: [[9961585, 9971584]] }, // closes 16 Nov 2026 16:17 UTC
+  { saleId: 2, lot: painting, ranges: [[9961585, 9971584], [9976700, 9976720], [10010760, 10010780], [10197080, 10197100], [10213100, 10213130]] }, // settled 16 Nov 2026: bids, then the opening and claims
   { saleId: 1, lot: painting, ranges: [[9961325, 9971324]] }, // settled; created, bid on, opened and claimed in its first range
 ];
 export const [openSale, lastSale] = SALES; // the landing shows the current sale and replays the last one
