@@ -9,7 +9,8 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync, createReadStream } 
 import http from "node:http";
 import { decodeEventLog } from "viem";
 import { bidsOf, checkBid, createListing, finish, setupIssuer } from "./consign.mjs";
-import { FUSD, SALE, makeKit, pub, sale } from "./kit.mjs";
+import { FUSD, SALE, fusd as fusdContract, makeKit, pub, sale } from "./kit.mjs";
+const fusdAbi = fusdContract.abi;
 
 const ISSUER = "0xCc7BfdE6Ed012e6E90B32D01979B87e34Ac00464"; // the treasury issuer of the sample sales
 const MAX_ENVELOPE = 4096; // bytes; one sealed bid is about 1.8 KB
@@ -24,6 +25,8 @@ const placed = existsSync(BIDS) ? JSON.parse(readFileSync(BIDS, "utf8")) : [];
 const kit = await makeKit(mnemonic);
 const guests = await Promise.all(Array.from({ length: Number(process.env.GUESTS ?? 2) }, (_, i) => kit.account(i)));
 const consignor = await kit.account(Number(process.env.CONSIGN ?? 100));
+// Sends token-form fUSD to QoreX bidders: the faucet pays fUSD as a bank coin, and QoreX won't sign the conversion.
+const topper = await kit.account(Number(process.env.TOPUP ?? 50));
 const LISTINGS = `${DATA}/listings.json`;
 const FILES = `${DATA}/files`;
 mkdirSync(FILES, { recursive: true });
@@ -105,6 +108,39 @@ async function place({ saleId, guest, fingerprint, envelope }, visitor) {
     lastBid.set(visitor, Date.now());
     return bid;
   });
+}
+
+// A QoreX bidder short of token-form fUSD gets exactly enough for one sale's deposit: once per address and per
+// visitor a day, at most TOPUPS_PER_DAY in all. ponytail: in memory, like the other limits.
+const TOPUPS_PER_DAY = 10;
+const lastTopup = new Map(); // visitor or address -> time
+const topups = [];
+async function topUp({ saleId, address }, visitor) {
+  if (!/^0x[0-9a-fA-F]{40}$/.test(String(address))) throw Object.assign(new Error("That isn't an EVM address."), { status: 400 });
+  const to = address.toLowerCase();
+  const s = await openSale(saleId);
+  const have = await kit.fusdOf(to);
+  if (have >= s.deposit) return { amount: "0", have: have.toString() };
+  const now = Date.now();
+  for (const k of [visitor, to]) if (now - (lastTopup.get(k) ?? 0) < PER_VISITOR) throw Object.assign(new Error("Allot sends fUSD once a day per account. Try again tomorrow, or bid as a guest."), { status: 429 });
+  while (topups.length && now - topups[0] > PER_VISITOR) topups.shift();
+  if (topups.length >= TOPUPS_PER_DAY) throw Object.assign(new Error("Allot has sent today's fUSD. Bid as a guest, or try again tomorrow."), { status: 429 });
+  [visitor, to].forEach((k) => lastTopup.set(k, now));
+  topups.push(now);
+  const amount = s.deposit - have;
+  try {
+    const tx = await serial(topper.evm, async () => {
+      await kit.ensureWindow(topper, [FUSD]);
+      const rc = await kit.evm(topper, { address: FUSD, abi: fusdAbi, functionName: "transfer", args: [to, amount] });
+      if (rc.status !== "success") throw new Error("transfer failed");
+      return rc.transactionHash;
+    });
+    return { amount: amount.toString(), tx };
+  } catch (e) {
+    [visitor, to].forEach((k) => lastTopup.delete(k));
+    topups.pop();
+    throw e;
+  }
 }
 
 // ---------------------------------------------------------------- consignment
@@ -248,6 +284,9 @@ http
         const kept = listings.find((l) => l.saleId === id)?.bidBlocks ?? [];
         return reply(res, 200, [...placed.filter((b) => b.saleId === id).map(({ tx, block, bidIndex }) => ({ tx, block, bidIndex })), ...kept.map((block) => ({ block }))]);
       }
+      if (req.method === "POST" && url.pathname === "/api/fusd") {
+        return reply(res, 200, await topUp(await body(req), visitor));
+      }
       if (req.method === "POST" && url.pathname === "/api/consign") {
         return reply(res, 200, await consign(req, url.searchParams, visitor));
       }
@@ -264,7 +303,7 @@ http
     } catch (e) {
       const status = e.status ?? 500;
       if (status === 500) console.error(new Date().toISOString(), req.method, url.pathname, e.shortMessage ?? e.message);
-      reply(res, status, { error: status === 500 ? `The ${url.pathname === "/api/consign" ? "listing" : "bid"} didn't go through. Try again in a minute.` : e.message });
+      reply(res, status, { error: status === 500 ? (url.pathname === "/api/fusd" ? "Allot couldn't send the fUSD just now. Try again in a minute, or bid as a guest." : `The ${url.pathname === "/api/consign" ? "listing" : "bid"} didn't go through. Try again in a minute.`) : e.message });
     }
   })
   .listen(Number(process.env.PORT ?? 8787), () => console.log(`guest server on ${process.env.PORT ?? 8787}, ${guests.length} guests:`, guests.map((g) => g.evm).join(" ")));

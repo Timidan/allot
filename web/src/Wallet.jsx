@@ -1,6 +1,7 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { connect, findQorex, readiness } from "./lib/qorex.js";
 import { money } from "./sale.js";
+import { STEP, SetupGuide, needs, openSetup } from "./SetupGuide.jsx";
 import { Qor } from "./TestnetHelp.jsx";
 
 // One QoreX connection for every page but the landing: the header shows it, the bid box uses it.
@@ -30,7 +31,7 @@ export const useWallet = () => useSyncExternalStore((f) => (subs.add(f), () => s
 
 export async function connectWallet() {
   const provider = await findWallet();
-  if (!provider) throw new Error("QoreX isn't in this browser.");
+  if (!provider) throw needs("QoreX isn't installed.", STEP.install);
   const address = await connect(provider);
   try {
     localStorage.removeItem(OFF);
@@ -64,14 +65,33 @@ export const STORES = {
   firefox: "https://addons.mozilla.org/firefox/addon/qorex/",
   safari: "https://apps.apple.com/us/app/qorex-wallet/id6794132220",
 };
-const GET_QOREX = IOS ? STORES.ios : ANDROID ? STORES.android : /Firefox\//.test(ua) ? STORES.firefox : /Safari\//.test(ua) && !/Chrome|Chromium|Edg/.test(ua) ? STORES.safari : STORES.chrome;
+export const GET_QOREX = IOS ? STORES.ios : ANDROID ? STORES.android : /Firefox\//.test(ua) ? STORES.firefox : /Safari\//.test(ua) && !/Chrome|Chromium|Edg/.test(ua) ? STORES.safari : STORES.chrome;
 const button = "inline-flex min-h-11 items-center border border-foreground/40 px-4 py-2 text-foreground transition-[background-color,color,scale] duration-150 hover:bg-foreground hover:text-background motion-safe:active:scale-[0.96]";
 const link = "text-accent underline underline-offset-4 hover:decoration-2";
 // Native popover: Escape and a tap outside close it. It sits under the header's top right, never wider than the screen.
 const panel = "fixed inset-auto right-5 top-20 m-0 w-[min(20rem,calc(100vw-2.5rem))] whitespace-normal border border-foreground/30 bg-background p-5 font-mono text-[14px] text-foreground md:right-12";
 
 // The header's wallet status: Connect QoreX, or the connected account with a panel of what it holds.
-export function WalletButton() {
+export const WalletButton = () => (
+  <>
+    <WalletStatus />
+    <SetupGuide />
+  </>
+);
+
+// The one thing this account still needs before it can bid, as the tap or link that does it.
+function Next({ info }) {
+  const how = (step) => <button className={`min-h-11 ${link}`} onClick={() => { document.getElementById("wallet")?.hidePopover(); openSetup(step); }} type="button">Show me how</button>;
+  const openIt = "In QoreX, tap \u201cMetaMask on QoreChain\u201d and open a window";
+  const say = !info.holder ? <>No post-quantum key on this account yet. {openIt}: QoreX registers the key as it opens it. {how(STEP.pass)}</>
+    : !info.passOk ? <>{info.live ? "Your access window is nearly used up." : "Your access window is closed."} {openIt}. {how(STEP.pass)}</>
+    : info.uqor < 300_000n ? <>No QOR for network fees. Get test QOR from QoreChain's faucet, once a day. {how(STEP.funds)}</>
+    : !info.token ? <>Ready, except for fUSD to bid with. When you bid from your wallet, Allot offers to send the deposit.</>
+    : <>Ready to bid from this account.</>;
+  return <p className="mt-4 border-t border-foreground/15 pt-3">{say}</p>;
+}
+
+function WalletStatus() {
   const { address, missing } = useWallet();
   const [error, setError] = useState("");
   const [info, setInfo] = useState(null);
@@ -139,14 +159,14 @@ export function WalletButton() {
           ) : (
             <>
               <div className="flex justify-between gap-4"><dt className="text-muted-foreground">Post-quantum key</dt><dd>{info ? (info.holder ? "Registered" : "Not yet") : "…"}</dd></div>
-              <div className="flex justify-between gap-4"><dt className="text-muted-foreground">fUSD</dt><dd>{info ? money(Number(info.fusd) / 1e6) : "…"}</dd></div>
+              <div className="flex justify-between gap-4"><dt className="text-muted-foreground">EVM access window</dt><dd>{info ? (info.passOk ? "Open" : info.live ? "Nearly used up" : "Closed") : "…"}</dd></div>
+              <div className="flex justify-between gap-4"><dt className="text-muted-foreground">fUSD to bid with</dt><dd>{info ? money(Number(info.token) / 1e6) : "…"}</dd></div>
+              {info?.bank ? <div className="flex justify-between gap-4"><dt className="text-muted-foreground">fUSD from the faucet</dt><dd>{money(Number(info.bank) / 1e6)}</dd></div> : null}
               <div className="flex justify-between gap-4"><dt className="text-muted-foreground">Network fees</dt><dd>{info ? <>{(Number(info.uqor) / 1e6).toFixed(2)} <Qor /></> : "…"}</dd></div>
             </>
           )}
         </dl>
-        {info && !info.failed && !info.holder ? (
-          <p className="mt-4 text-[13px] leading-normal text-muted-foreground">To bid, switch QoreX to an Ethereum (coin 60) account: Your accounts, then Add an Ethereum account. This panel then shows that account, the one to fund at the faucet.</p>
-        ) : null}
+        {info && !info.failed ? <Next info={info} /> : null}
         <button className={`mt-5 w-full ${button}`} onClick={disconnect} type="button">Disconnect</button>
       </div>
     </>

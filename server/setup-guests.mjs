@@ -1,7 +1,8 @@
 // Run on your own machine, never on the server: it needs the treasury mnemonic. Makes the guest mnemonic if missing
 // and readies each guest from the treasury: gas money, a registered ML-DSA-87 key, 200 fUSD, a window listing only
 // the sale and fUSD, and an fUSD approval for the sale contract. Prints addresses and transactions only. Rerun to top up.
-// Env: TREASURY_MNEMONIC_FILE, GUESTS_MNEMONIC_FILE (defaults under ../.secrets/), GUESTS (default 2), CONSIGN (default 100).
+// Env: TREASURY_MNEMONIC_FILE, GUESTS_MNEMONIC_FILE (defaults under ../.secrets/), GUESTS (default 2), CONSIGN (default 100),
+// TOPUP (default 50: the account that sends token fUSD to QoreX bidders), TOPUP_FUSD (default 150: its float).
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { MSG_SEND_TYPE_URL, buildRegisterPqcKeyMsg, signProofOfPossession } from "@qorechain/sdk";
 import { BinaryWriter } from "cosmjs-types/binary";
@@ -11,6 +12,7 @@ import { english, generateMnemonic } from "viem/accounts";
 import { CHAIN_ID, FUSD, SALE, fusd, makeKit, pub, sale } from "./kit.mjs";
 
 const GUESTS = Number(process.env.GUESTS ?? 2);
+const TOPUP = Number(process.env.TOPUP ?? 50); // the account that sends token fUSD to QoreX bidders
 const EACH = 200_000_000n; // 200 fUSD (6 decimals) per guest
 const GUEST_FILE = process.env.GUESTS_MNEMONIC_FILE ?? "../.secrets/guests.mnemonic";
 if (!existsSync(GUEST_FILE)) writeFileSync(GUEST_FILE, `${generateMnemonic(english)}\n`, { mode: 0o600 });
@@ -26,9 +28,12 @@ treasury.registry.register("/cosmos.evm.erc20.v1.MsgConvertCoin", {
 const issuer = await treasury.account(0);
 const usd = (x) => `${(Number(x) / 1e6).toFixed(2)}`;
 
-for (let i = 0; i < GUESTS; i++) {
+// The guests bid into sales; the top-up account only sends fUSD, so it needs a window for fUSD alone and no approval.
+const ready = [...Array(GUESTS).keys()].map((i) => ({ i, name: `guest ${i}`, each: EACH, targets: [SALE, FUSD], approve: true }));
+ready.push({ i: TOPUP, name: `top-up account ${TOPUP}`, each: BigInt(Math.round(Number(process.env.TOPUP_FUSD ?? 150) * 1e6)), targets: [FUSD], approve: false });
+for (const { i, name, each, targets, approve } of ready) {
   const g = await pool.account(i);
-  console.log(`guest ${i}`, g.evm);
+  console.log(name, g.evm);
   if ((await pool.uqor(g)) < 2_000_000n) {
     const tx = await treasury.native(issuer, [{ typeUrl: MSG_SEND_TYPE_URL, value: { fromAddress: issuer.cosmos, toAddress: g.cosmos, amount: [{ denom: "uqor", amount: "3000000" }] } }]);
     console.log("  sent 3 QOR for gas, tx", tx);
@@ -37,7 +42,7 @@ for (let i = 0; i < GUESTS; i++) {
     const msg = buildRegisterPqcKeyMsg(g.cosmos, { pqcKeypair: g.pqc, ecdsaPubkey: hexToBytes(g.publicKey), proofOfPossession: signProofOfPossession({ chainId: CHAIN_ID, account: g.cosmos, keypair: g.pqc }) });
     console.log("  registered its ML-DSA-87 key, tx", await pool.native(g, [msg], { classical: true }));
   }
-  const short = EACH - (await pool.fusdOf(g.evm));
+  const short = each - (await pool.fusdOf(g.evm));
   if (short > 0n) {
     const have = await treasury.fusdOf(issuer.evm);
     if (have < short) {
@@ -49,9 +54,9 @@ for (let i = 0; i < GUESTS; i++) {
     const rc = await treasury.evm(issuer, { ...fusd, functionName: "transfer", args: [g.evm, short] });
     console.log(`  sent ${usd(short)} of fUSD, tx`, rc.transactionHash);
   }
-  const w = await pool.ensureWindow(g, [SALE, FUSD]);
-  if (w) console.log("  opened a window for the sale and fUSD, tx", w);
-  if ((await pub.readContract({ ...fusd, functionName: "allowance", args: [g.evm, SALE] })) < maxUint256 / 2n) {
+  const w = await pool.ensureWindow(g, targets);
+  if (w) console.log("  opened a window, tx", w);
+  if (approve && (await pub.readContract({ ...fusd, functionName: "allowance", args: [g.evm, SALE] })) < maxUint256 / 2n) {
     const rc = await pool.evm(g, { ...fusd, functionName: "approve", args: [SALE, maxUint256] });
     console.log("  approved the sale contract to take deposits, tx", rc.transactionHash);
   }

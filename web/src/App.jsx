@@ -6,8 +6,9 @@ import Countdown from "./Countdown.jsx";
 import { Mark } from "./Landing.jsx";
 import { sealBid } from "./lib/bid.js";
 import { rangesOf, readBook, readCard, readSale } from "./lib/chain.js";
-import { placeOwn, prepare, readiness } from "./lib/qorex.js";
+import { placeOwn, readiness } from "./lib/qorex.js";
 import { SALES, SALE_CONTRACT, money, short } from "./sale.js";
+import { STEP, needs, openSetup } from "./SetupGuide.jsx";
 import TestnetHelp from "./TestnetHelp.jsx";
 import { ThemeSwitch } from "./theme.jsx";
 import { WalletButton, connectWallet, findWallet } from "./Wallet.jsx";
@@ -80,6 +81,9 @@ function BidBox({ sale, entry, onPlaced }) {
   const [note, setNote] = useState("");
   const [receipt, setReceipt] = useState(null);
   const [error, setError] = useState("");
+  const [help, setHelp] = useState(null); // the setup step that fixes the error, if one does
+  const [topup, setTopup] = useState(null); // fUSD Allot can send this account for the deposit, or null
+  const [sent, setSent] = useState(""); // what Allot just sent, said plainly
 
   // The contract can't see inside a sealed bid, so this box is the only place its size is checked:
   // price × shares may not exceed the deposit, or the bid can never be opened.
@@ -93,6 +97,7 @@ function BidBox({ sale, entry, onPlaced }) {
   // The order matters: the fingerprint names the bidder, so the guest comes first, then the seal, then the placing.
   const place = async () => {
     setError("");
+    setHelp(null);
     setNote("Getting a guest account…");
     setStep(0);
     try {
@@ -118,22 +123,25 @@ function BidBox({ sale, entry, onPlaced }) {
   // From the visitor's own QoreX wallet: connect, make sure the account can bid, seal for it, then QoreX signs.
   const placeWithQorex = async () => {
     setError("");
+    setSent("");
+    setHelp(null);
     setOwn(true);
     setNote("Connecting to QoreX…");
     setStep(0);
     try {
-      if (!(await findWallet())) throw new Error("QoreX isn't in this browser. Get it below, or bid as a guest.");
+      if (!(await findWallet())) throw needs("QoreX isn't installed.", STEP.install);
       const { provider, address } = await connectWallet(); // the header's connection: no prompt if already connected
       setGuest(address);
       const deposit = BigInt(sale.deposit) * DOLLAR;
       const ready = await readiness(address, deposit);
-      // QoreX sends EVM transactions (a bid is one) only from an Ethereum (coin 60) account, not its main QoreChain one.
-      if (!ready.holder) throw new Error("Bids come from an Ethereum (coin 60) account in QoreX. In QoreX, open Your accounts, add an Ethereum account (coin 60) and switch to it. Then get QOR and fUSD for it from QoreChain's faucet, open an EVM access window in QoreX, and bid again.");
-      if (!ready.canConvert) throw new Error(`You need ${sale.deposit} fUSD for the deposit. Get some from QoreChain's faucet below.`);
-      if (!ready.passOk) throw new Error("Open an EVM access window in QoreX first (QoreX, then EVM access window), then bid again. QoreChain refuses a bid sent without one.");
-      if (ready.toConvert) {
-        setNote("In QoreX, approve one post-quantum signed transaction: turning your fUSD into the sale's token.");
-        await prepare(ready.qor, address, ready);
+      // Each check says the one thing to do in QoreX, in the order the guide walks through them.
+      const tap = "In QoreX, tap \u201cMetaMask on QoreChain\u201d and open a window";
+      if (!ready.holder) throw needs(`This account has no post-quantum key on QoreChain yet. ${tap}: QoreX registers the key as it opens it. Then bid again.`, STEP.pass);
+      if (!ready.passOk) throw needs(`${ready.live ? "Your EVM access window is nearly used up" : "Your EVM access window is closed"}. ${tap}, then bid again.`, STEP.pass);
+      if (ready.uqor < 300_000n) throw needs("This account has no QOR for network fees. Get test QOR from QoreChain's faucet (once a day), then bid again.", STEP.funds);
+      if (ready.short) {
+        const have = (Number(ready.token) / 1e6).toFixed(2);
+        throw Object.assign(new Error(`This sale locks a ${sale.deposit} fUSD deposit, and this account has ${have} fUSD it can bid with.${ready.bank ? " Its faucet fUSD is a bank coin QoreX can't convert yet." : ""} Allot can send you the ${(Number(ready.short) / 1e6).toFixed(2)} fUSD you're short.`), { topup: ready.short });
       }
       setNote("Sealing…");
       const card = await readCard(SALE_CONTRACT, entry);
@@ -147,8 +155,27 @@ function BidBox({ sale, entry, onPlaced }) {
       setStep(2);
       onPlaced?.();
     } catch (e) {
-      setError((e.shortMessage ?? e.message ?? "").replace(/^QoreX: /, "") || "QoreX didn't place the bid.");
+      setError(walletError(e));
+      setHelp(e.help ?? (/Ethereum account/.test(walletError(e)) ? STEP.account : null));
+      setTopup(e.topup ?? null);
       setStep(-1);
+    }
+  };
+
+  // Allot sends the token-form fUSD this account is short of, then the visitor bids again.
+  const sendFusd = async () => {
+    setError("");
+    setTopup(null);
+    setNote("Allot is sending you fUSD for the deposit…");
+    setStep(0);
+    try {
+      const { address } = await connectWallet();
+      const r = await api("/api/fusd", { saleId, address });
+      setStep(-1);
+      setSent(Number(r.amount) ? `Sent ${(Number(r.amount) / 1e6).toFixed(2)} fUSD to your account. Now bid from your QoreX wallet again.` : "Your account already has enough fUSD. Bid from your QoreX wallet again.");
+    } catch (e) {
+      setStep(-1);
+      setError(e.message);
     }
   };
 
@@ -203,13 +230,30 @@ function BidBox({ sale, entry, onPlaced }) {
       <button className="mt-3 h-12 w-full rounded border border-foreground/40 text-[16px] transition-colors duration-150 hover:bg-foreground hover:text-background focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring" onClick={placeWithQorex} type="button">
         Bid from my QoreX wallet
       </button>
-      {error ? <p className="mt-3 text-[15px] text-destructive" role="alert">{error}</p> : null}
+      {sent ? <p className="mt-3 text-[15px] text-accent" role="status">{sent}</p> : null}
+      {error ? (
+        <p className="mt-3 text-[15px] text-destructive" role="alert">
+          {error}{help !== null ? <> <button className="min-h-11 text-accent underline underline-offset-4 hover:decoration-2" onClick={() => openSetup(help)} type="button">Show me how</button></> : null}
+          {topup ? <> <button className="min-h-11 font-semibold text-accent underline underline-offset-4 hover:decoration-2" onClick={sendFusd} type="button">Send me {(Number(topup) / 1e6).toFixed(2)} fUSD</button></> : null}
+        </p>
+      ) : null}
       <p className="mt-3 text-[15px] text-muted-foreground">
         Sealed in your browser with ML-KEM-1024 to {entry.lot.consigned ? "Allot's" : "the seller's"} registered key, <span className="font-mono text-[14px]" title={sale.issuer}>{short(sale.issuer)}</span>, and to a key in your receipt. Other bidders can't read it; {entry.lot.consigned ? "Allot, which runs this sale," : "the seller"} can.
       </p>
       <TestnetHelp />
     </div>
   );
+}
+
+// What QoreX or the chain said, as the one thing to do next.
+function walletError(e) {
+  const m = (e.shortMessage ?? e.message ?? "").replace(/^QoreX: /, "");
+  if (e.help !== undefined || e.topup) return m;
+  if (e.code === 4001 || /reject|denied|declined|cancel/i.test(m)) return "You declined in QoreX, so nothing was sent. Bid again when you're ready.";
+  if (/coin ?118|ethereum account|evm (send|transaction)s? .*not|not an? (evm|ethereum)/i.test(m)) return "QoreX sends bids only from an Ethereum account. In QoreX, choose the account marked \u201cEthereum \u00b7 coin 60\u201d, then bid again.";
+  if (/window/i.test(m)) return "QoreChain wants an open EVM access window. In QoreX, tap \u201cMetaMask on QoreChain\u201d and open a window, then bid again.";
+  if (/failed on chain/i.test(m)) return "QoreChain refused the bid. The sale may have just ended, or your window may have run out: open a new window in QoreX and bid again.";
+  return m ? `QoreX didn't send the bid (${m}). Nothing was charged; try again.` : "QoreX didn't send the bid. Nothing was charged; try again.";
 }
 
 const Tx = ({ hash, label }) =>
