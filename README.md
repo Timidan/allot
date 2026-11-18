@@ -73,7 +73,7 @@ When a visitor lists an item through /sell, Allot acts as the auction house: its
 | Solidity PQC key status (precompile `0x0A02`) | [`contracts/src/SealedSale.sol`](contracts/src/SealedSale.sol) (`isHybridHolder`) | Refuses bids from accounts without a registered ML-DSA-87 key |
 | Asset Kit: CMTAT with the post-quantum holder rule | [`server/consign.mjs`](server/consign.mjs) (`createListing`) | Each listed item's shares, with the file's URL and SHA-256 in the token's terms |
 | Test token fUSD | [`contracts/src/SealedSale.sol`](contracts/src/SealedSale.sol) | Deposits, payments and refunds |
-| QoreX | [`web/src/lib/qorex.js`](web/src/lib/qorex.js), [`web/src/Wallet.jsx`](web/src/Wallet.jsx) | Wallet status in the header; bids from QoreX; fUSD conversion with `signAndBroadcast` |
+| QoreX | [`web/src/lib/qorex.js`](web/src/lib/qorex.js), [`web/src/Wallet.jsx`](web/src/Wallet.jsx) | Wallet status in the header and bids from QoreX. QoreX doesn't sign fUSD's coin-to-token conversion, so a QoreX bidder short of fUSD is sent it by the server (`/api/fusd` in [`server/guest.mjs`](server/guest.mjs)) |
 
 Kits: `@qorechain/sdk`, `@qorechain/qoreseal`, `@qorechain/evm` and `@qorechain/qorex-types`, in [`web/package.json`](web/package.json) and [`server/package.json`](server/package.json).
 
@@ -144,6 +144,18 @@ forge test
 | [`server/`](server) | Guest bids and listings ([`guest.mjs`](server/guest.mjs)), token issuing and the keeper ([`consign.mjs`](server/consign.mjs)), chain helpers ([`kit.mjs`](server/kit.mjs)), guest funding ([`setup-guests.mjs`](server/setup-guests.mjs)) |
 | [`server/kit/`](server/kit) | The Asset Kit's CMTAT build used for listed items |
 
+## Credits
+
+- **QoreChain kits:** [`@qorechain/sdk`](https://www.npmjs.com/package/@qorechain/sdk), [`@qorechain/qoreseal`](https://www.npmjs.com/package/@qorechain/qoreseal), [`@qorechain/evm`](https://www.npmjs.com/package/@qorechain/evm), [`@qorechain/qorex-types`](https://www.npmjs.com/package/@qorechain/qorex-types), and the [QoreChain Asset Kit](https://github.com/qorechain/qorechain-asset-kit) v0.1.0 (its `IQorePqcKeyStatus` interface, and its CMTAT build in [`server/kit/`](server/kit), see its [`NOTICE`](server/kit/NOTICE)).
+- **CMTAT**, the token standard behind the shares, by [CMTA](https://github.com/CMTA/CMTAT).
+- **Site:** [React](https://react.dev), [Vite](https://vite.dev), [Tailwind CSS](https://tailwindcss.com), [Motion](https://motion.dev), [viem](https://viem.sh), `clsx` and `tailwind-merge`.
+- **Server:** [CosmJS](https://github.com/cosmos/cosmjs) (`@cosmjs/stargate`, `cosmjs-types`) and viem.
+- **Contract:** [Foundry](https://getfoundry.sh).
+- **Fonts:** Schibsted Grotesk, Fragment Mono and Bodoni Moda, from Google Fonts (SIL Open Font License).
+- **Image:** the photograph of *Walk on the Beach* is by Ángel M. Felicísimo, CC BY 2.0, via Wikimedia Commons.
+
+No project template was used.
+
 ## Licence
 
-Apache-2.0. The photograph of *Walk on the Beach* is by Ángel M. Felicísimo, CC BY 2.0, via Wikimedia Commons.
+Apache-2.0.
