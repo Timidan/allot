@@ -87,6 +87,14 @@ Kits: `@qorechain/sdk`, `@qorechain/qoreseal`, `@qorechain/evm` and `@qorechain/
 | Guest bidder | `qor1rj37hg8l46lx0wukj0sx0j29t9drfhdc96qeuy` |
 | Shares of *Walk on the Beach* | `0x8febcef691032a61956c7f1e1bc0b9094b16c16c` |
 
+### Q-Day Drill (18 Nov 2026)
+
+Allot's drill account is `qor12xwh4pplcscdy7s8mt4ye2xm2m93k2enhhfj3c` (`0x519d7A843fc430d27a07DAEa4Ca8dB56CB1b2B33`), a new testnet account with an ML-DSA-87 key registered with proof of possession. It holds QOR, fUSD, two *Walk on the Beach* shares and a sealed bid on sale 9.
+
+- **Proof transaction:** [`DD3F2528…E016B9`](https://dashboard.qorechain.io/explorer/tx/DD3F2528B9D63153FA3C36169125C166F5F66BAAAD8AF15A0E0F45BDDFE016B9), block 10307038, 18 Nov 09:07:49 UTC. A hybrid-signed native transaction that registers the account's QoreSeal key.
+- **What the leaked ECDSA key alone was refused before the drill:** native transfers and opening an EVM window (the hybrid signature is required), replacing the ML-DSA-87 key, EVM transfers, approvals and calls into the sale contract (no open window), an EIP-7702 delegation sent by another account, and a relayed MetaMask-style spend.
+- **Threat model:** the account's windows stay closed except for the seconds a bid takes, scoped to the sale contract and fUSD, with the deposit approved exactly. fUSD and the shares have no permit and no trusted forwarder, so the key can sign nothing off chain that moves them. Bids are sealed with ML-KEM-1024, so the key reads none of them.
+
 ## Limits
 
 - **Bids are private until the close, not for ever.** When the sale ends, every bid's price and shares are published on chain as it is opened.
