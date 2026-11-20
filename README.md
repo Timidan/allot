@@ -19,7 +19,7 @@ A secret-bid marketplace on QoreChain testnet. Every bid is sealed with post-qua
 [![React 19](https://img.shields.io/badge/React-19-61dafb?logo=react&logoColor=black)](web/package.json)
 [![Node 22](https://img.shields.io/badge/Node-22-5fa04e?logo=nodedotjs&logoColor=white)](server/package.json)
 
-[Live site](https://allot.timidan.xyz) · [Use it](#use-it) · [How a sale works](#how-a-sale-works) · [QoreChain integration](#qorechain-integration) · [Run it yourself](#run-it-yourself)
+[Live site](https://allot.timidan.xyz) · [Video](https://youtu.be/U59-iEn75HU) · [Use it](#use-it) · [How a sale works](#how-a-sale-works) · [QoreChain integration](#qorechain-integration) · [Run it yourself](#run-it-yourself)
 
 </div>
 
