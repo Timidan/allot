@@ -37,16 +37,23 @@ const fingerprintOf = (saleId, bidder, price, qty, salt) =>
 // or null with the reason in `why` when it could never be opened (so the keeper skips it and the guest server
 // refuses to place it).
 export function checkBid(keys, saleId, bidder, fingerprint, envelopeHex, deposit) {
-  let bid;
+  let bid, price, qty;
   try {
     bid = JSON.parse(new TextDecoder().decode(open({ chainId: CHAIN_ID, purpose: purpose(saleId), envelope: hexToBytes(envelopeHex), keys })));
-  } catch (x) {
-    return { why: `it can't be opened (${x.message})` };
+  } catch {
+    return { why: "it can't be opened" };
   }
-  const fits = BigInt(bid.price) > 0n && BigInt(bid.qty) > 0n && BigInt(bid.price) * BigInt(bid.qty) <= BigInt(deposit);
-  if (!fits) return { why: "price × shares exceeds the deposit" };
-  if (fingerprintOf(saleId, bidder, bid.price, bid.qty, bid.salt) !== fingerprint) return { why: "it doesn't match its fingerprint" };
-  return { price: BigInt(bid.price), qty: BigInt(bid.qty), salt: bid.salt };
+  // A sealed bid is untrusted input: anything malformed is skipped, so it can't stop the sale's other bids opening.
+  try {
+    price = BigInt(bid.price);
+    qty = BigInt(bid.qty);
+    if (!/^0x[0-9a-fA-F]{64}$/.test(bid.salt)) return { why: "its salt is malformed" };
+    if (price <= 0n || qty <= 0n || price >= 2n ** 128n || qty >= 2n ** 128n || price * qty > BigInt(deposit)) return { why: "price × shares exceeds the deposit" };
+    if (fingerprintOf(saleId, bidder, price, qty, bid.salt) !== fingerprint) return { why: "it doesn't match its fingerprint" };
+  } catch {
+    return { why: "its contents are malformed" };
+  }
+  return { price, qty, salt: bid.salt };
 }
 
 // Readies the issuer once: its ML-DSA-87 key, its encryption key, and the card bidders seal to. Returns the card.

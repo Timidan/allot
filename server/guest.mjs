@@ -60,12 +60,23 @@ async function openSale(saleId) {
   return s;
 }
 
+const handingOut = new Set(); // visitors with a hand-out in progress, so two at once can't hold two guests
 async function handOut(saleId, visitor) {
-  const s = await openSale(saleId);
   const now = Date.now();
   if (now - (lastBid.get(visitor) ?? 0) < PER_VISITOR) throw Object.assign(new Error("One guest bid per visitor a day."), { status: 429 });
   const mine = guests.find((g) => held.get(g.evm)?.visitor === visitor && held.get(g.evm).until > now);
   if (mine) return mine;
+  if (handingOut.has(visitor)) throw Object.assign(new Error("Already finding you a guest account. Try again in a moment."), { status: 409 });
+  handingOut.add(visitor);
+  try {
+    return await pickGuest(saleId, visitor, now);
+  } finally {
+    handingOut.delete(visitor);
+  }
+}
+
+async function pickGuest(saleId, visitor, now) {
+  const s = await openSale(saleId);
   let busy = false;
   for (const g of guests) {
     if ((await kit.fusdOf(g.evm)) < s.deposit) continue;
@@ -121,6 +132,7 @@ async function topUp({ saleId, address }, visitor) {
   const s = await openSale(saleId);
   const have = await kit.fusdOf(to);
   if (have >= s.deposit) return { amount: "0", have: have.toString() };
+  if (!(await pub.readContract({ ...sale, functionName: "isHybridHolder", args: [to] }))) throw Object.assign(new Error("This account can't bid yet: register its post-quantum key first."), { status: 400 });
   const now = Date.now();
   for (const k of [visitor, to]) if (now - (lastTopup.get(k) ?? 0) < PER_VISITOR) throw Object.assign(new Error("Allot sends fUSD once a day per account. Try again tomorrow, or bid as a guest."), { status: 429 });
   while (topups.length && now - topups[0] > PER_VISITOR) topups.shift();
@@ -269,7 +281,8 @@ const body = (req) =>
 
 http
   .createServer(async (req, res) => {
-    const url = new URL(req.url, "http://x");
+    let url;
+    try { url = new URL(req.url, "http://x"); } catch { return reply(res, 400, { error: "Bad request." }); }
     const visitor = visitorOf(req);
     try {
       if (req.method === "GET" && url.pathname === "/api/guest") {
