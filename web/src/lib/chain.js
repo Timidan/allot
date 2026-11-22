@@ -1,11 +1,13 @@
 // Reads sales from the sale contract over the EVM RPC (it allows any web origin).
 import { qorechainTestnet, toQorAddress } from "@qorechain/evm";
 import { createPublicClient, decodeEventLog, hexToBytes, http, parseAbi } from "viem";
+import { SALES, SALE_CONTRACT, readListings } from "../sale.js";
 
 export const pub = createPublicClient({ chain: qorechainTestnet, transport: http("https://evm-testnet.qore.host") });
 const abi = parseAbi([
   "function getSale(uint256) view returns ((address issuer, address asset, uint64 closeAt, uint64 openBy, uint128 supply, uint128 reserve, uint128 deposit, uint128 unit, uint128 clearing, uint128 sold, uint128 penaltyShare, uint128 earned, uint128 paid, uint32 opened, bool settled))",
   "function bidCount(uint256) view returns (uint256)",
+  "function bids(uint256 saleId, uint256 bidIndex) view returns (address bidder, bytes32 fingerprint, uint128 price, uint128 qty, uint128 filled, bool opened, bool claimed)",
   "event BidOpened(uint256 indexed saleId, uint256 indexed bidIndex, uint128 price, uint128 qty)",
   "event Claimed(uint256 indexed saleId, uint256 indexed bidIndex, uint256 assetAmount, uint256 refund)",
   "event BidPlaced(uint256 indexed saleId, uint256 indexed bidIndex, address indexed bidder, bytes32 fingerprint, bytes envelope)",
@@ -43,8 +45,8 @@ export async function readSale(address, saleId) {
 
 // Block ranges cut at the chain's latest block: the RPC refuses a log query that ends in the future, which a new
 // sale's first 10,000-block range does.
-const upTo = async (ranges) => {
-  const latest = Number(await pub.getBlockNumber());
+const upTo = async (ranges, tip) => {
+  const latest = tip ?? Number(await pub.getBlockNumber());
   return ranges.filter(([from]) => from <= latest).map(([from, to]) => [from, Math.min(to, latest)]);
 };
 
@@ -76,6 +78,51 @@ export async function rangesOf(s) {
   return [...s.ranges, ...guest.map((b) => [b.block, b.block])];
 }
 
+const decodeSaleEvents = (logs) => logs.flatMap((l) => {
+  if (l.address.toLowerCase() !== SALE_CONTRACT) return [];
+  try { return [decodeEventLog({ abi, data: l.data, topics: l.topics })]; } catch { return []; }
+});
+
+export async function readReceiptBid(receipt) {
+  const saleId = BigInt(receipt.saleId);
+  const matches = (log) => log.eventName === "BidPlaced" && log.args.saleId === saleId &&
+    log.args.bidder.toLowerCase() === receipt.bidder && log.args.fingerprint.toLowerCase() === receipt.fingerprint;
+  let ranges;
+  const find = async (eventName, args) => {
+    if (!ranges) {
+      const latest = Number(await pub.getBlockNumber());
+      const entry = SALES.find((s) => s.saleId === Number(saleId)) ??
+        (await readListings()).find((s) => s.saleId === Number(saleId));
+      const hints = await rangesOf(entry ?? { saleId: receipt.saleId, ranges: [] });
+      ranges = await upTo([...hints, [Math.max(0, latest - 9999), latest]], latest);
+    }
+    return (await Promise.all(ranges.map(([from, to]) => pub.getContractEvents({
+      address: SALE_CONTRACT, abi, eventName, args, fromBlock: BigInt(from), toBlock: BigInt(to),
+    })))).flat();
+  };
+
+  let tx = receipt.tx;
+  let placed;
+  if (tx) {
+    const rc = await pub.getTransactionReceipt({ hash: tx });
+    placed = rc.status === "success" && decodeSaleEvents(rc.logs).find(matches);
+    if (!placed) throw new Error("This transaction does not contain the bid in your receipt.");
+  } else {
+    placed = (await find("BidPlaced", { saleId, bidder: receipt.bidder })).find(matches);
+    if (!placed) return null;
+    tx = placed.transactionHash;
+  }
+
+  const { bidIndex } = placed.args;
+  const query = { address: SALE_CONTRACT, abi };
+  const [sale, bid] = await Promise.all([
+    pub.readContract({ ...query, functionName: "getSale", args: [saleId] }),
+    pub.readContract({ ...query, functionName: "bids", args: [saleId, bidIndex] }),
+  ]);
+  const claim = bid[6] ? (await find("Claimed", { saleId, bidIndex }))[0] : null;
+  return { tx, placed: placed.args, sale, claimed: bid[6], claim };
+}
+
 // QoreChain's REST API, read through the page's own /rest relay (the API sends no CORS headers).
 const rest = (path) => fetch(`${location.origin}/rest${path}`).then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status} for ${path}`))));
 
@@ -105,9 +152,7 @@ export async function readTx(hash) {
     const q = encodeURIComponent(`ethereum_tx.ethereumTxHash='${hash.toLowerCase()}'`);
     const [found, rc] = await Promise.all([rest(`/cosmos/tx/v1beta1/txs?query=${q}`), pub.getTransactionReceipt({ hash })]);
     const c = found.tx_responses?.[0];
-    const events = rc.logs.flatMap((l) => {
-      try { return [decodeEventLog({ abi, data: l.data, topics: l.topics })]; } catch { return []; }
-    });
+    const events = decodeSaleEvents(rc.logs);
     const used = attrs(c, "pqc_evm_window_used");
     const window = used ? await readWindow(rc.from, Number(used.window_open_height)).catch(() => null) : null;
     return {

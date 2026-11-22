@@ -7,7 +7,8 @@ import { Mark } from "./Landing.jsx";
 import { sealBid } from "./lib/bid.js";
 import { rangesOf, readBook, readCard, readSale } from "./lib/chain.js";
 import { placeOwn, readiness } from "./lib/qorex.js";
-import { SALES, SALE_CONTRACT, money, short } from "./sale.js";
+import { downloadReceipt, parseReceipt, saveReceipt } from "./lib/receipt.js";
+import { SALES, SALE_CONTRACT, money, readListings, short } from "./sale.js";
 import { STEP, needs, openSetup } from "./SetupGuide.jsx";
 import TestnetHelp from "./TestnetHelp.jsx";
 import { ThemeSwitch } from "./theme.jsx";
@@ -16,22 +17,10 @@ import { WalletButton, connectWallet, findWallet } from "./Wallet.jsx";
 const DOLLAR = 1_000_000n; // fUSD base units in one fUSD
 const tap = "pointer-coarse:inline-flex pointer-coarse:min-h-11 pointer-coarse:items-center"; // a 44px target for fingers
 
-// The hand-kept sample sales plus every sale listed through /sell, which the guest server keeps. Newest first.
-const lotOf = (l) => ({
-  title: l.title, artist: l.by, details: l.about, alt: `${l.title}, by ${l.by}`,
-  image: l.kind === "image" ? l.file : null, audio: l.kind === "audio" ? l.file : null, peaks: l.peaks ?? "", consigned: true,
-  note: "Listed by its owner; Allot runs the sale. Testnet sample: these shares are test tokens and stand for nothing.", credit: "",
-});
-let listed; // fetched once per page
-const fetchListed = () =>
-  (listed ??= fetch("/api/listings")
-    .then((r) => (r.ok ? r.json() : []))
-    .then((ls) => (Array.isArray(ls) ? ls : []).map((l) => ({ saleId: l.saleId, lot: lotOf(l), ranges: [[l.createBlock, l.createBlock + 9999]] })))
-    .catch(() => []));
 function useSales() {
   const [extra, setExtra] = useState(null);
   useEffect(() => {
-    fetchListed().then(setExtra);
+    readListings().then(setExtra);
   }, []);
   return { sales: [...SALES, ...(extra ?? [])].sort((a, b) => b.saleId - a.saleId), ready: extra !== null };
 }
@@ -45,24 +34,7 @@ const api = async (path, body) => {
   if (!r.ok) throw new Error(json.error ?? "The bid didn't go through. Try again in a minute.");
   return json;
 };
-// The receipt (price, shares, salt) is the only way to check your bid once it opens, so it stays in this browser
-// and can be downloaded.
-const keepReceipt = (r) => {
-  try {
-    localStorage.setItem("allot-receipts", JSON.stringify([...JSON.parse(localStorage.getItem("allot-receipts") ?? "[]"), r]));
-  } catch {
-    // storage off: the download is the only copy
-  }
-};
-const download = (r) => {
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(new Blob([JSON.stringify(r, null, 2)], { type: "application/json" }));
-  a.download = `allot-bid-${r.tx.slice(2, 10)}.json`;
-  a.click();
-  URL.revokeObjectURL(a.href);
-};
-
-// A bid carried over from the landing's try-it auction (?price=26&shares=3), held to this sale's limits.
+// Old bid links can still prefill the form. New lot links carry just the sale ID.
 function startingBid(sale) {
   const q = new URLSearchParams(location.search);
   const price = Math.max(sale.reserve, Math.min(sale.deposit, Math.round(Number(q.get("price")) || sale.reserve)));
@@ -98,19 +70,21 @@ function BidBox({ sale, entry, onPlaced }) {
   const place = async () => {
     setError("");
     setHelp(null);
-    setNote("Getting a guest account…");
+    setNote("Sealing your bid…");
     setStep(0);
     try {
       const { guest: bidder } = await api(`/api/guest?sale=${saleId}`);
       setGuest(bidder);
-      setNote(`Sealing ${shares} shares at ${price} fUSD…`);
       const card = await readCard(SALE_CONTRACT, entry);
       const sealed = await sealBid({ saleContract: SALE_CONTRACT, saleId: saleId, bidder, price: BigInt(price) * DOLLAR, qty: shares, issuer: card.address, card });
+      const draft = parseReceipt({ ...sealed.receipt, fingerprint: sealed.fingerprint });
+      if (!saveReceipt(draft)) throw new Error("Allow this site to save your private receipt, then try again.");
       setBytes(sealed.envelope.length);
       setStep(1);
       const placed = await api("/api/bid", { saleId: saleId, guest: bidder, fingerprint: sealed.fingerprint, envelope: toHex(sealed.envelope) });
-      const r = { ...sealed.receipt, fingerprint: sealed.fingerprint, bidIndex: placed.bidIndex, tx: placed.tx };
-      keepReceipt(r);
+      const r = parseReceipt({ ...draft, tx: placed.tx });
+      if (!r.tx) throw new Error("Check My bid for confirmation before trying again.");
+      saveReceipt(r);
       setReceipt(r);
       setStep(2);
       onPlaced?.();
@@ -149,8 +123,8 @@ function BidBox({ sale, entry, onPlaced }) {
       setBytes(sealed.envelope.length);
       setStep(1);
       const tx = await placeOwn(provider, address, saleId, deposit, sealed.fingerprint, toHex(sealed.envelope));
-      const r = { ...sealed.receipt, fingerprint: sealed.fingerprint, tx };
-      keepReceipt(r);
+      const r = parseReceipt({ ...sealed.receipt, fingerprint: sealed.fingerprint, tx });
+      saveReceipt(r);
       setReceipt(r);
       setStep(2);
       onPlaced?.();
@@ -186,7 +160,7 @@ function BidBox({ sale, entry, onPlaced }) {
         label: "Place",
         content: (
           <p className="text-[16px] text-muted-foreground">
-            Sealed: {bytes.toLocaleString()} bytes. {own ? "In QoreX, approve the deposit (first time only), then the bid." : `Placing it on QoreChain from guest ${short(guest)}. Up to a minute.`}
+            {own ? `Sealed: ${bytes.toLocaleString()} bytes. In QoreX, approve the deposit (first time only), then the bid.` : "Sending your sealed bid to QoreChain. This can take up to a minute."}
           </p>
         ),
       },
@@ -194,13 +168,13 @@ function BidBox({ sale, entry, onPlaced }) {
         label: "Done",
         content: receipt ? (
           <div className="space-y-3 text-[16px]">
-            <p className="font-semibold">Placed: {shares} shares at {price} fUSD, sealed.</p>
-            <p className="text-muted-foreground">{own ? "From your QoreX account" : "Guest"} {short(guest)}. Until the sale ends, only you and {entry.lot.consigned ? "Allot, which runs it," : "the seller"} can read it.</p>
+            <p className="font-semibold">Bid confirmed</p>
+            <p className="text-muted-foreground">Up to {shares} editions at {price} fUSD each from {own ? "your QoreX account" : "Allot's guest account"} {short(guest)}.</p>
             <p className="flex flex-wrap gap-x-5 gap-y-2">
-              <Tx hash={receipt.tx} label="Open it from the chain" />
-              <button className="underline underline-offset-4" onClick={() => download(receipt)} type="button">Download receipt</button>
+              <a className="text-accent underline underline-offset-4" href={`/my-bid?bid=${receipt.fingerprint}`}>My bid</a>
+              <button className="underline underline-offset-4" onClick={() => downloadReceipt(receipt)} type="button">Download private receipt</button>
             </p>
-            <p className="text-[14px] text-muted-foreground">Keep the receipt: it holds the key that opens your bid in this browser, and proves your bid when the sale ends.</p>
+            <p className="text-[14px] text-muted-foreground">Keep the file private. It opens your bid and lets you check the result on another device.</p>
           </div>
         ) : null,
       },
@@ -217,18 +191,18 @@ function BidBox({ sale, entry, onPlaced }) {
       {/* side by side only when each field has room for "100" and both buttons */}
       <div className="grid gap-3 @min-[18rem]:grid-cols-2">
         {/* scrub off: a sideways drag on a phone would change the bid by accident */}
-        <DigitRoll className="w-full" label="Price a share in fUSD" max={sale.deposit} min={sale.reserve} onValueChange={onPrice} scrub={false} stepper value={price} />
-        <DigitRoll className="w-full" label="Shares" max={Math.min(sale.supply, Math.floor(sale.deposit / price))} min={1} onValueChange={onShares} scrub={false} stepper value={shares} />
+        <DigitRoll className="w-full" label="Editions wanted" max={Math.min(sale.supply, Math.floor(sale.deposit / price))} min={1} onValueChange={onShares} scrub={false} stepper value={shares} />
+        <DigitRoll className="w-full" label="Maximum per edition" max={sale.deposit} min={sale.reserve} onValueChange={onPrice} scrub={false} stepper value={price} />
       </div>
       <div className="my-4 flex justify-between text-[15px] text-muted-foreground">
-        <span>Your bid</span>
-        <span><b className="font-semibold text-foreground">{money(price * shares)}</b> of the {sale.deposit} fUSD deposit</span>
+        <span>Maximum total</span>
+        <b className="font-semibold text-foreground">{money(price * shares)}</b>
       </div>
       <button className="h-13 w-full rounded bg-primary font-semibold text-primary-foreground transition-[background-color,transform] duration-150 hover:bg-accent active:scale-[0.99] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring" onClick={() => { setOwn(false); place(); }} type="button">
-        Place sealed bid as a guest
+        Leave a sealed bid
       </button>
       <button className="mt-3 h-12 w-full rounded border border-foreground/40 text-[16px] transition-colors duration-150 hover:bg-foreground hover:text-background focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring" onClick={placeWithQorex} type="button">
-        Bid from my QoreX wallet
+        Use my wallet
       </button>
       {sent ? <p className="mt-3 text-[15px] text-accent" role="status">{sent}</p> : null}
       {error ? (
@@ -238,7 +212,10 @@ function BidBox({ sale, entry, onPlaced }) {
         </p>
       ) : null}
       <p className="mt-3 text-[15px] text-muted-foreground">
-        Sealed in your browser with ML-KEM-1024 to {entry.lot.consigned ? "Allot's" : "the seller's"} registered key, <span className="font-mono text-[14px]" title={sale.issuer}>{short(sale.issuer)}</span>, and to a key in your receipt. Other bidders can't read it; {entry.lot.consigned ? "Allot, which runs this sale," : "the seller"} can.
+        You may get fewer editions and pay the clearing price for those you receive. Allot supplies the {sale.deposit} fUSD guest deposit and receives the testnet editions and refunds in its guest account.
+      </p>
+      <p className="mt-2 text-[15px] text-muted-foreground">
+        Your browser seals the bid for you and {entry.lot.consigned ? "Allot, the auction house" : "the seller"}.
       </p>
       <TestnetHelp />
     </div>
@@ -467,8 +444,8 @@ export const SiteHeader = () => (
   // On a phone the links take a second row, so every page stays one tap away.
   <header className="mx-auto flex max-w-[1360px] flex-wrap items-center gap-x-4 px-5 pt-4 pb-2 md:flex-nowrap md:gap-x-10 md:py-6 md:px-12">
     <a className="flex min-h-11 items-center gap-2 text-lg font-semibold" href="/"><Mark />Allot</a>
-    <nav className="order-last flex w-full gap-6 font-mono text-[14px] text-muted-foreground md:order-none md:w-auto md:gap-7">
-      {[["/sales", "Sales"], ["/sell", "Sell"], ["/#how", "How it works"]].map(([href, text]) => (
+    <nav className="order-last flex w-full flex-wrap gap-x-5 font-mono text-[14px] text-muted-foreground md:order-none md:w-auto md:gap-x-7">
+      {[["/sales", "Sales"], ["/sell", "Sell"], ["/my-bid", "My bid"], ["/#how", "How it works"]].map(([href, text]) => (
         <a className={`inline-flex min-h-11 items-center ${location.pathname === href ? "text-foreground" : "hover:text-foreground"}`} href={href} key={href}>{text}</a>
       ))}
     </nav>

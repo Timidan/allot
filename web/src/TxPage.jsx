@@ -1,46 +1,8 @@
 import { useEffect, useState } from "react";
-import { hexToBytes } from "viem";
 import { SiteHeader } from "./App.jsx";
-import { openOwnBid } from "./lib/bid.js";
 import { readTx } from "./lib/chain.js";
 import { SALE_CONTRACT, money as fusd, short } from "./sale.js";
 import { Qor } from "./TestnetHelp.jsx";
-
-// The receipt this browser kept for a bid, if it placed it (App.jsx keeps them in localStorage).
-const receiptFor = (hash) => {
-  try {
-    return JSON.parse(localStorage.getItem("allot-receipts") ?? "[]").find((r) => r.key && r.tx?.toLowerCase() === hash.toLowerCase()) ?? null;
-  } catch {
-    return null;
-  }
-};
-
-// Opens the bidder's own bid from the envelope on chain, in this browser, with the key from their receipt.
-function YourBid({ placed, receipt }) {
-  const [out, setOut] = useState(null);
-  const go = () => {
-    try {
-      const a = placed.args;
-      setOut(openOwnBid({ saleContract: SALE_CONTRACT, saleId: a.saleId, bidder: a.bidder, envelope: hexToBytes(a.envelope), fingerprint: a.fingerprint, key: receipt.key }));
-    } catch (e) {
-      setOut({ error: `Your receipt's key couldn't open it: ${e.message}` });
-    }
-  };
-  if (!out) {
-    return (
-      <button className="inline-flex min-h-11 items-center bg-foreground px-4 text-[15px] text-background transition-[background-color,scale] duration-150 hover:bg-accent motion-safe:active:scale-[0.96]" onClick={go} type="button">
-        Open it in this browser
-      </button>
-    );
-  }
-  if (out.error) return <span className="text-destructive" role="alert">{out.error}</span>;
-  return (
-    <span aria-live="polite">
-      <b className="font-semibold">{out.qty} shares at {money(out.price)}</b>, opened here with your receipt's key (ML-KEM-1024).{" "}
-      {out.matches ? "It matches the fingerprint the contract stored." : <span className="text-destructive">It does not match the fingerprint the contract stored.</span>}
-    </span>
-  );
-}
 
 // /tx/<hash>: one transaction, read from QoreChain testnet, in plain words.
 const EXTERNAL = "https://dashboard.qorechain.io/explorer/tx/";
@@ -87,7 +49,7 @@ export default function TxPage({ hash }) {
             <Row label="Status">{t.ok ? "Succeeded" : "Failed"}, block {t.block.toLocaleString()}, {when(t.time)}</Row>
             {t.evm ? <Row label="From → to">{who(t.from)} → {who(t.to)}</Row> : <Row label="Sent by">{short(t.from ?? "")}</Row>}
             {placed ? <Row label="Inside">Sealed with ML-KEM-1024: {((placed.args.envelope.length - 2) / 2).toLocaleString()} bytes. The price and shares stay hidden until the seller opens it after the sale ends.</Row> : null}
-            {placed && receiptFor(hash) ? <Row label="Your bid"><YourBid placed={placed} receipt={receiptFor(hash)} /></Row> : null}
+            {placed ? <Row label="Your receipt"><a className="text-accent underline-offset-4 hover:underline" href={`/my-bid?tx=${hash}`}>Check your bid in this browser →</a></Row> : null}
             {opened.length ? <Row label="Opened">{opened.map((e) => `${e.args.qty} at ${money(e.args.price)}`).join(", ")}</Row> : null}
             {claimed ? <Row label="Paid out">{String(claimed.args.assetAmount)} shares, {money(claimed.args.refund)} back</Row> : null}
             {t.evm ? (

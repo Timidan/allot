@@ -4,7 +4,7 @@ import Countdown from "./Countdown.jsx";
 import SeaShader from "./SeaShader.jsx";
 import TryAuction from "./TryAuction.jsx";
 import { rangesOf, readBook, readSale, readWindow } from "./lib/chain.js";
-import { SALE_CONTRACT, lastSale, openSale, painting, short } from "./sale.js";
+import { SALE_CONTRACT, lastSale, openSale, painting, readListings, short } from "./sale.js";
 import { ThemeSwitch } from "./theme.jsx";
 
 // A share split four ways, one taken: the mark.
@@ -127,17 +127,23 @@ export default function Landing() {
   const [last, setLast] = useState(null);
   const [book, setBook] = useState(null);
   const [down, setDown] = useState(false); // a chain read failed
+  const [listed, setListed] = useState([]);
   const nav = useRef(null);
   const words = useRef(null);
   const card = useRef(null);
   const calm = useMemo(() => [nav, words, card], []);
   useEffect(() => {
     const fail = () => setDown(true);
+    readListings().then(setListed);
     readSale(SALE_CONTRACT, openSale.saleId).then(setOpen, fail);
     rangesOf(openSale).then((r) => readBook(SALE_CONTRACT, openSale.saleId, r)).then(setSealed, fail);
     readSale(SALE_CONTRACT, lastSale.saleId).then(setLast, fail);
     readBook(SALE_CONTRACT, lastSale.saleId, lastSale.ranges).then(setBook, fail);
   }, []);
+  const sampleOpen = open && !open.settled && open.closeAt > Date.now();
+  const live = listed.find((lot) => !lot.done && lot.closeAt > Date.now());
+  const bidHref = sampleOpen ? `/sales/${openSale.saleId}` : live ? `/sales/${live.saleId}` : "/sales";
+  const bidLabel = sampleOpen ? "Place a bid" : "See an open lot";
 
   return (
     <div className="relative min-h-dvh bg-background font-mono text-foreground">
@@ -146,8 +152,7 @@ export default function Landing() {
       <header className="absolute inset-x-0 top-0 z-10 flex flex-wrap items-center gap-x-10 whitespace-nowrap px-6 pt-4 md:h-22 md:flex-nowrap md:px-12 md:pt-0" ref={nav}>
         <a className="flex min-h-11 items-center gap-2 font-sans text-lg font-semibold" href="/"><Mark />Allot</a>
         <nav className="order-last flex w-full gap-5 text-[14px] text-foreground/80 md:order-none md:w-auto md:gap-7">
-          {/* "Why QoreChain" is a section further down; on a narrow phone it gives way so the other three fit. */}
-          {[["#how", "How it works"], ["#why", "Why QoreChain"], ["/sales", "Sales"], ["/sell", "Sell"]].map(([href, text]) => (
+          {[["#how", "How it works"], ["#why", "Why QoreChain"], ["/sales", "Sales"], ["/sell", "Sell"], ["/my-bid", "My bid"]].map(([href, text]) => (
             <a className={`${href === "#why" ? "hidden sm:inline-flex" : "inline-flex"} min-h-11 items-center hover:text-foreground`} href={href} key={href}>{text}</a>
           ))}
         </nav>
@@ -178,13 +183,13 @@ export default function Landing() {
             <div className="mt-3 font-sans text-[16px] font-semibold">{painting.title}</div>
             <div className="text-[13px] text-muted-foreground">{painting.artist}, 1909. Testnet sample</div>
             <Facts className="mt-3 text-[13px] text-foreground/80" open={open} />
-            <a className={`mt-3 flex min-h-11 items-center justify-center bg-foreground px-3 py-2 text-[14px] text-background hover:bg-accent ${press}`} href={`/sales/${openSale.saleId}`}>Place a bid →</a>
+            <a className={`mt-3 flex min-h-11 items-center justify-center bg-foreground px-3 py-2 text-[14px] text-background hover:bg-accent ${press}`} href={bidHref}>{bidLabel} →</a>
           </aside>
         </div>
       </section>
 
       <Section id="how" sub={<Sub>10 shares of {painting.title} are for sale. Ana, Ben, Chi and Dee have already bid. Your turn.</Sub>} title="How a secret&#8209;bid sale works">
-        {last && book ? <TryAuction book={book} last={last} /> : <Waiting down={down} />}
+        {last && book ? <TryAuction bidHref={bidHref} book={book} last={last} /> : <Waiting down={down} />}
       </Section>
 
       <Section
@@ -216,7 +221,7 @@ export default function Landing() {
           <img alt={painting.alt} className={`aspect-[16/10] w-full object-cover sm:w-[300px] ${outlined}`} src={painting.image} />
           <div className="flex-1">
             <Facts className="text-[17px]" open={open} />
-            <a className={`mt-6 flex h-12 items-center justify-center bg-foreground text-[16px] text-background hover:bg-accent ${press}`} href={`/sales/${openSale.saleId}`}>Place a bid →</a>
+            <a className={`mt-6 flex h-12 items-center justify-center bg-foreground text-[16px] text-background hover:bg-accent ${press}`} href={bidHref}>{bidLabel} →</a>
           </div>
         </div>
       </Section>

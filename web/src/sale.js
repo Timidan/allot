@@ -24,3 +24,18 @@ export const SALES = [
   { saleId: 1, lot: painting, ranges: [[9961325, 9971324]] }, // settled; created, bid on, opened and claimed in its first range
 ];
 export const [openSale, lastSale] = SALES; // the landing shows the current sale and replays the last one
+
+let listings;
+export function readListings() {
+  return (listings ??= fetch("/api/listings")
+    .then((r) => (r.ok ? r.json() : []))
+    .then((ls) => (Array.isArray(ls) ? ls : []).map((l) => ({
+      saleId: l.saleId, closeAt: l.closeAt, done: l.done, ranges: [[l.createBlock, l.createBlock + 9999]],
+      lot: {
+        title: l.title, artist: l.by, details: l.about, alt: `${l.title}, by ${l.by}`,
+        image: l.kind === "image" ? l.file : null, audio: l.kind === "audio" ? l.file : null, peaks: l.peaks ?? "", consigned: true,
+        note: "Listed by its owner; Allot runs the sale. Testnet sample: these shares are test tokens and stand for nothing.", credit: "",
+      },
+    })))
+    .catch(() => []));
+}
