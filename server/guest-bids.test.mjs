@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { ContractFunctionRevertedError, encodeAbiParameters, encodeErrorResult, encodeEventTopics, keccak256, parseAbi, WaitForTransactionReceiptTimeoutError } from "viem";
+import { ContractFunctionRevertedError, RpcRequestError, TransactionReceiptNotFoundError, encodeAbiParameters, encodeErrorResult, encodeEventTopics, keccak256, parseAbi, WaitForTransactionReceiptTimeoutError } from "viem";
 import { guestBids, guestBidStatus } from "./guest-bids.mjs";
 
 test("a win skips the backup and a confirmed loss can recover one broadcast after restart", async (t) => {
@@ -95,6 +95,29 @@ test("a refused primary bid releases the sponsored guest", async (t) => {
   await assert.rejects(orders.advance("refused"), /provider unavailable/);
   assert.equal(guestBidStatus(orders.get("refused")).state, "waiting");
   providerReady = true;
+  assert.equal(guestBidStatus(await orders.advance("refused")).state, "failed");
+  assert.equal(orders.busy(guest), false);
+});
+
+test("a bid the node refuses outright frees its guest", async (t) => {
+  const folder = mkdtempSync(join(tmpdir(), "allot-bid-test-"));
+  t.after(() => rmSync(folder, { recursive: true, force: true }));
+  const guest = "0x0000000000000000000000000000000000000123";
+  const abi = parseAbi(["function placeBid(uint256,bytes32,bytes) returns (uint256)"]);
+  const orders = guestBids({
+    file: join(folder, "guest-bids.json"), targets: [], sale: { address: "0x0000000000000000000000000000000000000456", abi },
+    guests: [{ evm: guest, wallet: { prepareTransactionRequest: async () => ({}), signTransaction: async () => "0x0102" } }],
+    kit: { fusdOf: async () => 10n, ensureWindow: async () => null },
+    pub: {
+      getBlock: async () => ({ number: 20n, timestamp: 10n }),
+      simulateContract: async () => {},
+      getTransactionReceipt: async ({ hash }) => { throw new TransactionReceiptNotFoundError({ hash }); },
+      sendRawTransaction: async () => {
+        throw new RpcRequestError({ body: {}, url: "http://node", error: { code: -32000, message: "has no open EVM authorisation window" } });
+      },
+    },
+  });
+  orders.save({ id: "refused", guest, primary: { saleId: 7, closeAt: "100", deposit: "10", fingerprint: `0x${"11".repeat(32)}`, envelope: "0xab" } });
   assert.equal(guestBidStatus(await orders.advance("refused")).state, "failed");
   assert.equal(orders.busy(guest), false);
 });

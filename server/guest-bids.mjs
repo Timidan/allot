@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import {
-  ContractFunctionRevertedError, decodeEventLog, encodeFunctionData, keccak256,
+  ContractFunctionRevertedError, decodeEventLog, encodeFunctionData, keccak256, RpcRequestError,
   TransactionReceiptNotFoundError, WaitForTransactionReceiptTimeoutError,
 } from "viem";
 
@@ -104,8 +104,18 @@ export function guestBids({ file, pub, sale, kit, guests, targets, checkBackup }
         order = update(order, name, { signed: { raw, hash: keccak256(raw), windowTx } });
         leg = order[name];
       }
-      // An uncertain submission can only retry these exact signed bytes, never a fresh nonce.
-      await pub.sendRawTransaction({ serializedTransaction: leg.signed.raw }).catch(() => {});
+      // An uncertain submission can only retry these exact signed bytes, never a fresh nonce. A network failure
+      // is retried; a node that answers with a refusal (no window, nonce already used) means these bytes can never
+      // land, so the bid ends as failed and frees its guest instead of holding it until the sale closes.
+      try {
+        await pub.sendRawTransaction({ serializedTransaction: leg.signed.raw });
+      } catch (error) {
+        const refusal = error.walk?.((cause) => cause instanceof RpcRequestError);
+        if (refusal && !/already known|known transaction|already in (the )?mempool/i.test(refusal.details ?? refusal.message)) {
+          const landed = await pub.getTransactionReceipt({ hash: leg.signed.hash }).catch(() => null);
+          if (!landed) return end(order, name, "failed");
+        }
+      }
       try {
         receipt = await pub.waitForTransactionReceipt({ hash: leg.signed.hash, timeout: 12_000, checkReplacement: false });
       } catch (error) {

@@ -47,8 +47,8 @@ function BidProof({ bid }) {
   const { claim, claimed, sale, terms, tx } = bid;
   const rows = [["Your sealed bid", `Up to ${terms.qty} at ${amount(terms.price)} each`]];
   if (claim) rows.push(
-    ["Editions delivered", String(claim.args.assetAmount / sale.unit)],
-    ["Clearing price per edition", sale.clearing ? amount(sale.clearing) : "No winning bids"],
+    ["Shares delivered", String(claim.args.assetAmount / sale.unit)],
+    ["Clearing price a share", sale.clearing ? amount(sale.clearing) : "No winning bids"],
     ["Deposit returned", amount(claim.args.refund)],
   );
   return (
@@ -165,7 +165,7 @@ export default function MyBid() {
   };
   return (
     <>
-      <SiteHeader showWallet={false} />
+      <SiteHeader />
       <main className="mx-auto max-w-[720px] px-5 pb-20 pt-6 sm:px-12">
         <h1 className="text-[44px] font-semibold leading-tight tracking-tight">My bid</h1>
         <div className="my-6 flex flex-wrap items-end gap-4">

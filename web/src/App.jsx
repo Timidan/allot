@@ -96,6 +96,7 @@ function BidBox({ sale, entry, backupEntry, onPlaced }) {
         return sealBid({ saleContract: SALE_CONTRACT, saleId: lot.saleId, bidder, price: BigInt(limit) * DOLLAR, qty: shares, issuer: card.address, card });
       };
       const [sealed, backup] = await Promise.all([sealLot(entry, price), backupLimit === null ? null : sealLot(backupEntry, backupPrice)]);
+      setBytes(sealed.envelope.length);
       const leg = (bid) => ({ saleId: bid.receipt.saleId, fingerprint: bid.fingerprint, envelope: toHex(bid.envelope) });
       const requestId = crypto.randomUUID();
       draft = parseReceipt({
@@ -193,7 +194,7 @@ function BidBox({ sale, entry, backupEntry, onPlaced }) {
         label: "Place",
         content: (
           <p className="text-[16px] text-muted-foreground">
-            {own ? `Sealed: ${bytes.toLocaleString()} bytes. In QoreX, approve the deposit (first time only), then the bid.` : "Sending your sealed bid to QoreChain. This can take up to a minute."}
+            Sealed: {bytes.toLocaleString()} bytes. {own ? "In QoreX, approve the deposit (first time only), then the bid." : "Placing it on QoreChain from a guest account. Up to a minute."}
           </p>
         ),
       },
@@ -202,7 +203,7 @@ function BidBox({ sale, entry, backupEntry, onPlaced }) {
         content: receipt ? (
           <div className="space-y-3 text-[16px]">
             <p className="font-semibold">{receipt.tx ? "Bid confirmed" : "Check your bid status"}</p>
-            <p className="text-muted-foreground">Up to {shares} editions at {price} fUSD each from {own ? "your QoreX account" : "Allot's guest account"} {short(guest)}.</p>
+            <p className="text-muted-foreground">Up to {shares} shares at {price} fUSD each from {own ? "your QoreX account" : "Allot's guest account"} {short(guest)}.</p>
             {receipt.backup && receipt.tx ? <p className="text-muted-foreground">Backup queued for {backupEntry.lot.title}.</p> : null}
             <p className="flex flex-wrap gap-x-5 gap-y-2">
               <a className="text-accent underline underline-offset-4" href={`/my-bid?bid=${receipt.fingerprint}`}>My bid</a>
@@ -225,8 +226,8 @@ function BidBox({ sale, entry, backupEntry, onPlaced }) {
       {/* side by side only when each field has room for "100" and both buttons */}
       <div className="grid gap-3 @min-[18rem]:grid-cols-2">
         {/* scrub off: a sideways drag on a phone would change the bid by accident */}
-        <DigitRoll className="w-full" label="Editions wanted" max={Math.min(sale.supply, Math.floor(sale.deposit / price))} min={1} onValueChange={onShares} scrub={false} stepper value={shares} />
-        <DigitRoll className="w-full" label="Maximum per edition" max={sale.deposit} min={sale.reserve} onValueChange={onPrice} scrub={false} stepper value={price} />
+        <DigitRoll className="w-full" label="Shares" max={Math.min(sale.supply, Math.floor(sale.deposit / price))} min={1} onValueChange={onShares} scrub={false} stepper value={shares} />
+        <DigitRoll className="w-full" label="Most you'll pay a share, fUSD" max={sale.deposit} min={sale.reserve} onValueChange={onPrice} scrub={false} stepper value={price} />
       </div>
       <div className="my-4 flex justify-between text-[15px] text-muted-foreground">
         <span>Maximum total</span>
@@ -236,16 +237,16 @@ function BidBox({ sale, entry, backupEntry, onPlaced }) {
         <div className="mb-4 border-y border-border py-3">
           <label className="flex items-start gap-3 text-[15px]">
             <input checked={backupLimit !== null} className="mt-1 size-4 shrink-0 accent-foreground" onChange={(e) => setBackupLimit(e.target.checked ? "" : null)} type="checkbox" />
-            Try {backupEntry?.lot.title ?? "the backup lot"} if I get no editions and the full deposit comes back
+            Try {backupEntry?.lot.title ?? "the backup lot"} if I win no shares and the full deposit comes back
           </label>
           {backupLimit !== null ? (
             <label className="mt-3 grid gap-1 pl-7 text-[15px]">
-              Backup maximum per edition in fUSD
+              Most you'll pay a share in the backup, fUSD
               <input className="min-h-11 w-full border border-border bg-background px-3 focus-visible:outline-2 focus-visible:outline-ring"
                 min={backupSale?.reserve} max={backupMax ?? undefined} onChange={(e) => setBackupLimit(e.target.value)} step={1} type="number" value={backupLimit} />
               {backupOpen && shares <= backupSale.supply && backupMax >= backupSale.reserve
-                ? <span className="text-muted-foreground">{validBackup ? `Maximum total ${money(backupPrice * shares)}` : `Enter ${backupSale.reserve} to ${backupMax} fUSD per edition.`}</span>
-                : <span className="text-muted-foreground">Choose fewer editions or remove the backup.</span>}
+                ? <span className="text-muted-foreground">{validBackup ? `Maximum total ${money(backupPrice * shares)}` : `Enter ${backupSale.reserve} to ${backupMax} fUSD a share.`}</span>
+                : <span className="text-muted-foreground">Choose fewer shares or remove the backup.</span>}
             </label>
           ) : null}
         </div>
@@ -266,11 +267,12 @@ function BidBox({ sale, entry, backupEntry, onPlaced }) {
         </p>
       ) : null}
       <p className="mt-3 text-[15px] text-muted-foreground">
-        You may get fewer editions and pay the clearing price for those you receive. Allot supplies the {sale.deposit} fUSD guest deposit and receives the testnet editions and refunds in its guest account.
+        You may win fewer shares, and every winner pays the clearing price. As a guest, Allot supplies the {sale.deposit} fUSD deposit, and the shares and refund go to its guest account.
       </p>
       <p className="mt-2 text-[15px] text-muted-foreground">
-        Your browser seals the bid for you and {entry.lot.consigned ? "Allot, the auction house" : "the seller"}.
+        Sealed in your browser with ML-KEM-1024 to {entry.lot.consigned ? "Allot's" : "the seller's"} registered key, <span className="font-mono text-[14px]" title={sale.issuer}>{short(sale.issuer)}</span>, and to a key in your receipt. Other bidders can't read it; {entry.lot.consigned ? "Allot, which runs this sale," : "the seller"} can.
       </p>
+      <TestnetHelp />
     </div>
   );
 }
@@ -493,7 +495,7 @@ function ResultPage({ last, book, lot }) {
   );
 }
 
-export const SiteHeader = ({ showWallet = true }) => (
+export const SiteHeader = () => (
   // On a phone the links take a second row, so every page stays one tap away.
   <header className="mx-auto flex max-w-[1360px] flex-wrap items-center gap-x-4 px-5 pt-4 pb-2 md:flex-nowrap md:gap-x-10 md:py-6 md:px-12">
     <a className="flex min-h-11 items-center gap-2 text-lg font-semibold" href="/"><Mark />Allot</a>
@@ -505,7 +507,7 @@ export const SiteHeader = ({ showWallet = true }) => (
     <div className="ml-auto flex items-center gap-3 whitespace-nowrap font-mono text-[14px] text-muted-foreground sm:gap-5">
       <span className="hidden sm:inline">Testnet</span>
       <ThemeSwitch className="min-h-11 px-1 py-2 hover:text-foreground" />
-      {showWallet ? <WalletButton /> : null}
+      <WalletButton />
     </div>
   </header>
 );
@@ -592,7 +594,7 @@ export default function App({ saleId }) {
   const result = new URLSearchParams(location.search).get("view") === "result";
   return (
     <>
-      <SiteHeader showWallet={false} />
+      <SiteHeader />
       {error ? <p className="mx-auto max-w-[1360px] px-5 pb-4 text-sm text-destructive md:px-12" role="alert">{error}</p> : null}
       {!entry ? (
         <main className="mx-auto max-w-[1200px] px-5 pb-20 md:px-12">
