@@ -40,6 +40,13 @@ Every bid, opening and claim is on [the sale's page](https://allot.timidan.xyz/s
 
 Built for QoreChain's *Build Before Q-Day* developer fest, category Encrypted Apps.
 
+### The four Encrypted Apps requirements, on testnet
+
+- **ML-KEM-1024 encryption, client side.** [A guest bid in sale 2](https://allot.timidan.xyz/tx/0xb8140a32734deb7c96730659a41c6c6fd25d56c7ba7665d480b98d5182e4e4a3): a 3,543-byte QoreSeal envelope sealed in the bidder's browser to two recipients, the seller and the bidder's receipt key ([`sealBid`](web/src/lib/bid.js)).
+- **Registered recipient keys.** The ML-KEM-1024 key registrations of [the sample seller](https://dashboard.qorechain.io/explorer/tx/7CFADD8568BB28FD7D1D5862C5983E2E18EE6017E13761D9B0D7529FA6E05C55) and of [Allot's listing account](https://dashboard.qorechain.io/explorer/tx/A761C38759DC012D7B3603DF0A285AF590CF4D0E4C5C20D883CB7486CC5948DE), both hybrid-signed with ML-DSA-87.
+- **ML-DSA key binding.** Each sale's `SaleCreated` event carries the seller's recipient card, signed with ML-DSA-87. The browser checks it against both registered keys before it seals, and refuses a card that doesn't match.
+- **Client-side decryption.** Bid in [sale 10](https://allot.timidan.xyz/sales/10), open until 15 Dec 2026, as a guest, then press *Open it from the chain*: your browser opens your envelope with the key in your receipt and checks it against the fingerprint the contract stored. The practice auction on the home page opens all five of its bids in the browser. Sellers open bids outside the browser (see [Limits](#limits)).
+
 ## Use it
 
 Open **https://allot.timidan.xyz** (QoreChain testnet; shares are test tokens and stand for nothing). No wallet is needed.
@@ -99,6 +106,7 @@ Allot's drill account is `qor12xwh4pplcscdy7s8mt4ye2xm2m93k2enhhfj3c` (`0x519d7A
 
 - **Bids are private until the close, not for ever.** When the sale ends, every bid's price and shares are published on chain as it is opened.
 - **The seller can read bids before the close.** Bids are sealed to the seller, or to Allot for listed items, and QoreSeal has no timed release. Other bidders and outsiders cannot read them.
+- **Sellers open bids outside the browser.** For listed items, Allot's server opens a guest bid when it is placed, to refuse one that could never be opened, and its keeper opens every bid after the close to publish it on chain. The sample sales were opened by the seller's own script. Only the bidder's side of the decryption runs in the browser.
 - **A bid's own signature is ECDSA.** It is admitted only inside a window opened with ML-DSA-87, but the bid transaction itself is not ML-DSA-signed.
 - **Bidding from QoreX** has not been tested with a real wallet, and QoreX's mobile app may not yet send EVM transactions.
 - **Listed items' proceeds stay with Allot** on testnet; they are not forwarded to the person who listed the item.
@@ -132,6 +140,7 @@ For one optional backup pair, set `BACKUP_LOTS=11,12` using the IDs of two open 
 The contract:
 
 ```bash
+git submodule update --init   # the Asset Kit, in contracts/lib
 cd contracts
 forge test
 ```
