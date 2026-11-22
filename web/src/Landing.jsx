@@ -4,7 +4,7 @@ import Countdown from "./Countdown.jsx";
 import SeaShader from "./SeaShader.jsx";
 import TryAuction from "./TryAuction.jsx";
 import { rangesOf, readBook, readSale, readWindow } from "./lib/chain.js";
-import { SALE_CONTRACT, lastSale, openSale, painting, short } from "./sale.js";
+import { SALE_CONTRACT, lastSale, liveSale, openSale, painting, short } from "./sale.js";
 import { ThemeSwitch } from "./theme.jsx";
 
 // A share split four ways, one taken: the mark.
@@ -178,7 +178,7 @@ export default function Landing() {
             <div className="mt-3 font-sans text-[16px] font-semibold">{painting.title}</div>
             <div className="text-[13px] text-muted-foreground">{painting.artist}, 1909. Testnet sample</div>
             <Facts className="mt-3 text-[13px] text-foreground/80" open={open} />
-            <a className={`mt-3 flex min-h-11 items-center justify-center bg-foreground px-3 py-2 text-[14px] text-background hover:bg-accent ${press}`} href={`/sales/${openSale.saleId}`}>Place a bid →</a>
+            <a className={`mt-3 flex min-h-11 items-center justify-center bg-foreground px-3 py-2 text-[14px] text-background hover:bg-accent ${press}`} href={`/sales/${liveSale.saleId}`}>Bid on {liveSale.title} →</a>
           </aside>
         </div>
       </section>
@@ -216,7 +216,7 @@ export default function Landing() {
           <img alt={painting.alt} className={`aspect-[16/10] w-full object-cover sm:w-[300px] ${outlined}`} src={painting.image} />
           <div className="flex-1">
             <Facts className="text-[17px]" open={open} />
-            <a className={`mt-6 flex h-12 items-center justify-center bg-foreground text-[16px] text-background hover:bg-accent ${press}`} href={`/sales/${openSale.saleId}`}>Place a bid →</a>
+            <a className={`mt-6 flex h-12 items-center justify-center bg-foreground text-[16px] text-background hover:bg-accent ${press}`} href={`/sales/${liveSale.saleId}`}>Bid on {liveSale.title} →</a>
           </div>
         </div>
       </Section>

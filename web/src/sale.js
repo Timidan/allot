@@ -24,3 +24,5 @@ export const SALES = [
   { saleId: 1, lot: painting, ranges: [[9961325, 9971324]] }, // settled; created, bid on, opened and claimed in its first range
 ];
 export const [openSale, lastSale] = SALES; // the landing shows the current sale and replays the last one
+// The listed sale the landing sends bidders to: open through judging, closes 15 Dec 2026 20:00 UTC.
+export const liveSale = { saleId: 10, title: "Eight Notes" };

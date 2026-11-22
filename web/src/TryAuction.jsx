@@ -4,7 +4,7 @@ import { generateSealKeys, open, recipientOf, seal as sealTo } from "@qorechain/
 import DigitRoll from "@/components/smoothui/digit-roll";
 import ByteTiles from "./ByteTiles.jsx";
 import { CHAIN_ID } from "./lib/bid.js";
-import { money, openSale } from "./sale.js";
+import { liveSale, money } from "./sale.js";
 
 // A practice auction: the last sale's four real bids plus the visitor's. On "Seal it" this browser makes an
 // ML-KEM-1024 key and seals all five bids to it; on "End the sale" it opens every envelope with that key and
@@ -195,8 +195,8 @@ export default function TryAuction({ last, book }) {
               </div>
               <div className="flex flex-wrap gap-3">
                 <Button autoFocus onClick={replay} quiet>Try again</Button>
-                <a className="inline-flex min-h-12 items-center bg-foreground px-5 py-3 text-[16px] text-background transition-[background-color,color,scale] duration-150 hover:bg-accent motion-safe:active:scale-[0.96]" href={`/sales/${openSale.saleId}?price=${price}&shares=${shares}`}>
-                  Place this bid in the real sale →
+                <a className="inline-flex min-h-12 items-center bg-foreground px-5 py-3 text-[16px] text-background transition-[background-color,color,scale] duration-150 hover:bg-accent motion-safe:active:scale-[0.96]" href={`/sales/${liveSale.saleId}`}>
+                  Bid in a real sale: {liveSale.title} →
                 </a>
               </div>
             </div>

@@ -64,7 +64,7 @@ export default function Sell() {
       <main className="mx-auto max-w-[1200px] px-5 pb-20 md:px-12">
         <h1 className="text-[40px] font-semibold leading-tight tracking-tight md:text-[56px]">Sell shares in your own work</h1>
         <p className="mt-3 max-w-[60ch] text-pretty text-[18px] text-muted-foreground">
-          Upload an image or a song. Allot runs a sealed-bid sale of shares in it: it issues the shares on QoreChain testnet, holds the key that opens the bids, and settles when time runs out. Every bid locks a 10 fUSD deposit.
+          Upload an image or a song. Allot runs a sealed-bid sale of shares in it: it issues the shares on QoreChain testnet, holds the key that opens the bids, and settles when time runs out. Every bid locks a 10 fUSD deposit. The fUSD the sale raises stays with Allot: this is a testnet demo, so nothing is paid to you.
         </p>
         <form className="mt-10 grid gap-10 md:grid-cols-[minmax(0,1fr)_minmax(320px,440px)] md:items-start" onSubmit={submit}>
           <div>
