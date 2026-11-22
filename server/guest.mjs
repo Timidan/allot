@@ -4,16 +4,21 @@
 // runs its sale; a keeper settles each one after its close. See consign.mjs.
 // Env: GUESTS_MNEMONIC (or GUESTS_MNEMONIC_FILE), GUESTS (count, default 2), PORT (8787), DATA (./data),
 // CONSIGN (account index, default 100), PUBLIC (the site's origin, for file links in token terms).
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync, mkdirSync, existsSync, createReadStream } from "node:fs";
 import http from "node:http";
-import { decodeEventLog } from "viem";
-import { bidsOf, checkBid, createListing, finish, setupIssuer } from "./consign.mjs";
+import { OPEN_FOR, bidsOf, checkBid, createListing, finish, setupIssuer } from "./consign.mjs";
+import { guestBids, guestBidStatus, requestIdPattern } from "./guest-bids.mjs";
 import { FUSD, SALE, fusd as fusdContract, makeKit, pub, sale } from "./kit.mjs";
 const fusdAbi = fusdContract.abi;
 
 const ISSUER = "0xCc7BfdE6Ed012e6E90B32D01979B87e34Ac00464"; // the treasury issuer of the sample sales
-const MAX_ENVELOPE = 4096; // bytes; one sealed bid is about 1.8 KB
+const MAX_ENVELOPE = 4096;
+const BACKUP_BUFFER = 3600n;
+const pilot = process.env.BACKUP_LOTS?.trim();
+if (pilot && !/^\d{1,6},\d{1,6}$/.test(pilot)) throw new Error("Set BACKUP_LOTS to two sale IDs separated by a comma.");
+const [primaryId, backupId] = pilot ? pilot.split(",").map(Number) : [];
+if (pilot && primaryId === backupId) throw new Error("The primary and backup need different sale IDs.");
 const HOLD = 10 * 60_000; // a guest handed to a visitor is kept for them this long
 const PER_VISITOR = 24 * 3600_000; // one guest bid per visitor in this time
 const mnemonic = (process.env.GUESTS_MNEMONIC || readFileSync(process.env.GUESTS_MNEMONIC_FILE, "utf8")).trim();
@@ -34,8 +39,17 @@ const listings = existsSync(LISTINGS) ? JSON.parse(readFileSync(LISTINGS, "utf8"
 const saveListings = () => writeFileSync(LISTINGS, JSON.stringify(listings, null, 2));
 const ISSUERS = [ISSUER, consignor.evm].map((x) => x.toLowerCase()); // guests bid only into sales these created
 const held = new Map(); // guest evm address -> { visitor, until }
-const lastBid = new Map(); // visitor -> time of their last guest bid
+const lastBid = new Map(); // visitor -> most recent guest order and its time
 const queue = new Map(); // guest evm address -> promise; one transaction at a time per guest
+const orders = guestBids({
+  file: `${DATA}/guest-bids.json`, pub, sale, kit, guests, targets: [SALE, FUSD],
+  checkBackup: async ({ guest, backup }) => {
+    const state = await pub.readContract({ ...sale, functionName: "getSale", args: [BigInt(backup.saleId)] });
+    if (state.issuer.toLowerCase() !== consignor.evm.toLowerCase() || state.deposit !== BigInt(backup.deposit)) return false;
+    const bid = checkBid((await readyIssuer()).keys, backup.saleId, guest, backup.fingerprint, backup.envelope, state.deposit);
+    return !bid.why && bid.price >= state.reserve && bid.qty <= state.supply;
+  },
+});
 
 const serial = (addr, job) => {
   const next = (queue.get(addr) ?? Promise.resolve()).then(job, job);
@@ -63,7 +77,10 @@ async function openSale(saleId) {
 const handingOut = new Set(); // visitors with a hand-out in progress, so two at once can't hold two guests
 async function handOut(saleId, visitor) {
   const now = Date.now();
-  if (now - (lastBid.get(visitor) ?? 0) < PER_VISITOR) throw Object.assign(new Error("One guest bid per visitor a day."), { status: 429 });
+  const recent = lastBid.get(visitor);
+  if (recent && now - recent.at < PER_VISITOR && !orders.get(recent.id)?.primary.ended) {
+    throw Object.assign(new Error("One guest bid per visitor a day."), { status: 429 });
+  }
   const mine = guests.find((g) => held.get(g.evm)?.visitor === visitor && held.get(g.evm).until > now);
   if (mine) return mine;
   if (handingOut.has(visitor)) throw Object.assign(new Error("Already finding you a guest account. Try again in a moment."), { status: 409 });
@@ -79,6 +96,7 @@ async function pickGuest(saleId, visitor, now) {
   const s = await openSale(saleId);
   let busy = false;
   for (const g of guests) {
+    if (orders.busy(g.evm)) { busy = true; continue; }
     if ((await kit.fusdOf(g.evm)) < s.deposit) continue;
     const h = held.get(g.evm);
     if (h && h.until > now) { busy = true; continue; }
@@ -88,14 +106,59 @@ async function pickGuest(saleId, visitor, now) {
   throw Object.assign(new Error(busy ? "Every guest account is in use. Try again in a few minutes." : "No guest bids left in this sale. They free up when it settles."), { status: 409 });
 }
 
-async function place({ saleId, guest, fingerprint, envelope }, visitor) {
-  if (!/^0x[0-9a-fA-F]{64}$/.test(fingerprint ?? "")) throw Object.assign(new Error("Bad fingerprint."), { status: 400 });
-  if (!/^0x[0-9a-fA-F]+$/.test(envelope ?? "") || (envelope.length - 2) / 2 > MAX_ENVELOPE) throw Object.assign(new Error("Bad envelope."), { status: 400 });
+function sealedLeg(value) {
+  if (!/^\d{1,6}$/.test(String(value?.saleId)) ||
+      !/^0x[0-9a-fA-F]{64}$/.test(value?.fingerprint ?? "") || typeof value?.fingerprint !== "string") {
+    throw Object.assign(new Error("Invalid sale or bid fingerprint."), { status: 400 });
+  }
+  if (typeof value.envelope !== "string" || value.envelope.length > 2 + 2 * MAX_ENVELOPE || !/^0x(?:[0-9a-fA-F]{2})+$/.test(value.envelope)) {
+    throw Object.assign(new Error("Invalid bid envelope."), { status: 400 });
+  }
+  return { saleId: Number(value.saleId), fingerprint: value.fingerprint.toLowerCase(), envelope: value.envelope };
+}
+
+function listedBackup(saleId) {
+  if (saleId !== primaryId) return;
+  const primary = listings.find((l) => l.saleId === primaryId && !l.done && l.closeAt > Date.now());
+  if (primary) return listings.find((l) => l.saleId === backupId && !l.done &&
+    l.closeAt >= primary.closeAt + Number(OPEN_FOR + BACKUP_BUFFER) * 1000);
+}
+
+async function place(value, visitor) {
+  const primary = sealedLeg(value);
+  const { saleId, fingerprint, envelope } = primary;
+  const { guest, backup, requestId = randomUUID() } = value;
+  if (typeof requestId !== "string" || !requestIdPattern.test(requestId)) throw Object.assign(new Error("Invalid bid request."), { status: 400 });
+  const id = requestId.toLowerCase();
+  const second = backup === undefined ? null : sealedLeg(backup);
+  const previous = () => {
+    const existing = orders.get(id);
+    if (!existing) return;
+    if (existing.guest.toLowerCase() !== String(guest).toLowerCase() || existing.primary.saleId !== saleId ||
+        existing.primary.fingerprint !== fingerprint || existing.backup?.saleId !== second?.saleId ||
+        existing.backup?.fingerprint !== second?.fingerprint) {
+      throw Object.assign(new Error("This receipt is already tied to another bid."), { status: 409 });
+    }
+    return guestBidStatus(existing);
+  };
+  const retry = previous();
+  if (retry) return retry;
   const g = guests.find((x) => x.evm.toLowerCase() === String(guest).toLowerCase());
   const h = g && held.get(g.evm);
   const notYours = () => Object.assign(new Error("That guest isn't yours. Start the bid again."), { status: 409 });
   if (!h || h.visitor !== visitor || h.until < Date.now()) throw notYours();
   const s = await openSale(saleId);
+  let candidate;
+  if (second) {
+    if (listedBackup(saleId)?.saleId !== second.saleId) throw Object.assign(new Error("This backup lot is unavailable."), { status: 409 });
+    candidate = await openSale(second.saleId);
+    const { timestamp } = await pub.getBlock();
+    const issuer = consignor.evm.toLowerCase();
+    if (s.issuer.toLowerCase() !== issuer || candidate.issuer.toLowerCase() !== issuer || timestamp >= s.closeAt ||
+        candidate.deposit !== s.deposit || candidate.closeAt < s.openBy + BACKUP_BUFFER) {
+      throw Object.assign(new Error("These lots cannot share a backup bid."), { status: 409 });
+    }
+  }
   // In a sale Allot runs, the server holds the opening key: refuse a bid that could never be opened, so it can't
   // hold up the sale's settlement until the opening deadline.
   if (s.issuer.toLowerCase() === consignor.evm.toLowerCase()) {
@@ -103,21 +166,27 @@ async function place({ saleId, guest, fingerprint, envelope }, visitor) {
     if (bid.why) throw Object.assign(new Error(`This bid can't be placed: ${bid.why}.`), { status: 400 });
   }
   return serial(g.evm, async () => {
-    // Checked again in the queue: two requests racing on one hold must not both place a bid.
+    const retry = previous();
+    if (retry) return retry;
     const now = held.get(g.evm);
-    if (!now || now.visitor !== visitor) throw notYours();
-    const windowTx = await kit.ensureWindow(g, [SALE, FUSD]);
-    const args = [BigInt(saleId), fingerprint, envelope];
-    await pub.simulateContract({ ...sale, functionName: "placeBid", args, account: g.evm });
-    if (process.env.DRY) return { simulated: true, guest: g.evm }; // local checks: everything but the send
-    const rc = await kit.evm(g, { ...sale, functionName: "placeBid", args });
-    const ev = rc.logs.filter((l) => l.address.toLowerCase() === SALE.toLowerCase()).map((l) => decodeEventLog({ abi: sale.abi, data: l.data, topics: l.topics })).find((e) => e.eventName === "BidPlaced");
-    const bid = { saleId: Number(saleId), bidIndex: Number(ev.args.bidIndex), guest: g.evm, tx: rc.transactionHash, block: Number(rc.blockNumber), windowTx };
-    placed.push(bid);
-    writeFileSync(BIDS, JSON.stringify(placed, null, 2));
+    if (!now || now.visitor !== visitor || now.until < Date.now()) throw notYours();
+    if (process.env.DRY) {
+      await pub.simulateContract({ ...sale, functionName: "placeBid", args: [BigInt(saleId), fingerprint, envelope], account: g.evm });
+      return { simulated: true, guest: g.evm };
+    }
+    const leg = (sealed, state) => ({ ...sealed, closeAt: String(state.closeAt), deposit: String(state.deposit) });
+    const order = orders.save({
+      id, guest: g.evm, primary: leg(primary, s),
+      ...(second && { backup: leg(second, candidate) }),
+    });
     held.delete(g.evm);
-    lastBid.set(visitor, Date.now());
-    return bid;
+    lastBid.set(visitor, { id, at: Date.now() });
+    try {
+      return guestBidStatus(await orders.advance(id));
+    } catch (e) {
+      console.error("Guest placement will be checked by the keeper:", e.name);
+      return guestBidStatus(orders.get(id) ?? order);
+    }
   });
 }
 
@@ -241,7 +310,7 @@ async function consign(req, q, visitor) {
 }
 
 // Every minute: note each consigned sale's new bids (so the page finds QoreX bids too), and finish closed ones.
-async function keep() {
+async function keepListings() {
   for (const l of listings.filter((x) => !x.done)) {
     try {
       const latest = Number(await pub.getBlockNumber());
@@ -262,14 +331,33 @@ async function keep() {
     }
   }
 }
+
+let keeping = false;
+async function keep() {
+  if (keeping) return;
+  keeping = true;
+  try {
+    await keepListings();
+    if (process.env.DRY) return;
+    for (const order of orders.pending()) {
+      try {
+        await serial(order.guest, () => orders.advance(order.id));
+      } catch (e) {
+        console.error("Guest bid keeper will check again:", e.name);
+      }
+    }
+  } finally {
+    keeping = false;
+  }
+}
 setInterval(keep, 60_000);
 
-const body = (req) =>
+const body = (req, limit = 16_384) =>
   new Promise((resolve, reject) => {
     let s = "";
     req.on("data", (c) => {
       s += c;
-      if (s.length > 16_384) {
+      if (s.length > limit) {
         reject(Object.assign(new Error("Too large."), { status: 413 }));
         req.destroy(); // stop reading: an oversized body is not buffered further
       }
@@ -290,12 +378,18 @@ http
         return reply(res, 200, { guest: g.evm });
       }
       if (req.method === "POST" && url.pathname === "/api/bid") {
-        return reply(res, 200, await place(await body(req), visitor));
+        return reply(res, 200, await place(await body(req, 18 * 1024), visitor));
+      }
+      if (req.method === "POST" && url.pathname === "/api/bid-status") {
+        const { requestId } = await body(req) ?? {};
+        const order = typeof requestId === "string" && requestIdPattern.test(requestId) && orders.get(requestId.toLowerCase());
+        return order ? reply(res, 200, guestBidStatus(order)) : reply(res, 404, { error: "No submitted bid for this receipt yet." });
       }
       if (req.method === "GET" && url.pathname === "/api/bids") {
         const id = Number(url.searchParams.get("sale"));
         const kept = listings.find((l) => l.saleId === id)?.bidBlocks ?? [];
-        return reply(res, 200, [...placed.filter((b) => b.saleId === id).map(({ tx, block, bidIndex }) => ({ tx, block, bidIndex })), ...kept.map((block) => ({ block }))]);
+        const bids = [...placed.filter((b) => b.saleId === id), ...orders.placements(id)];
+        return reply(res, 200, [...bids.map(({ tx, block, bidIndex }) => ({ tx, block, bidIndex })), ...kept.map((block) => ({ block }))]);
       }
       if (req.method === "POST" && url.pathname === "/api/fusd") {
         return reply(res, 200, await topUp(await body(req), visitor));
@@ -304,7 +398,8 @@ http
         return reply(res, 200, await consign(req, url.searchParams, visitor));
       }
       if (req.method === "GET" && url.pathname === "/api/listings") {
-        return reply(res, 200, listings.map(({ saleId, title, by, about, kind, peaks, file, sha256, token, createBlock, closeAt, done }) => ({ saleId, title, by, about, kind, peaks, file, sha256, token, createBlock, closeAt, done })));
+        return reply(res, 200, listings.map(({ saleId, title, by, about, kind, peaks, file, sha256, token, createBlock, closeAt, done }) =>
+          ({ saleId, title, by, about, kind, peaks, file, sha256, token, createBlock, closeAt, done, backupSaleId: listedBackup(saleId)?.saleId })));
       }
       const f = req.method === "GET" && url.pathname.match(/^\/api\/files\/([0-9a-f]{64})\.(jpg|png|webp|wav|ogg|mp3|m4a)$/);
       if (f && existsSync(`${FILES}/${f[1]}.${f[2]}`)) {

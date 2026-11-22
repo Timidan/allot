@@ -88,29 +88,43 @@ export async function readReceiptBid(receipt) {
   const matches = (log) => log.eventName === "BidPlaced" && log.args.saleId === saleId &&
     log.args.bidder.toLowerCase() === receipt.bidder && log.args.fingerprint.toLowerCase() === receipt.fingerprint;
   let ranges;
-  const find = async (eventName, args) => {
+  let latest;
+  const find = async (eventName, args, firstBlock) => {
     if (!ranges) {
-      const latest = Number(await pub.getBlockNumber());
+      latest = Number(await pub.getBlockNumber());
       const entry = SALES.find((s) => s.saleId === Number(saleId)) ??
         (await readListings()).find((s) => s.saleId === Number(saleId));
       const hints = await rangesOf(entry ?? { saleId: receipt.saleId, ranges: [] });
       ranges = await upTo([...hints, [Math.max(0, latest - 9999), latest]], latest);
     }
-    return (await Promise.all(ranges.map(([from, to]) => pub.getContractEvents({
+    const logs = (from, to) => pub.getContractEvents({
       address: SALE_CONTRACT, abi, eventName, args, fromBlock: BigInt(from), toBlock: BigInt(to),
-    })))).flat();
+    });
+    const found = (await Promise.all(ranges.map(([from, to]) => logs(from, to)))).flat();
+    if (found.length || firstBlock === undefined) return found;
+    // A receipt can still find this exact claim if the keeper lost its local block hint.
+    for (let to = latest - 10_000; to >= firstBlock;) {
+      const from = Math.max(firstBlock, to - 9999);
+      const page = await logs(from, to);
+      if (page.length) return page;
+      to = from - 1;
+    }
+    return [];
   };
 
   let tx = receipt.tx;
   let placed;
+  let block;
   if (tx) {
     const rc = await pub.getTransactionReceipt({ hash: tx });
     placed = rc.status === "success" && decodeSaleEvents(rc.logs).find(matches);
     if (!placed) throw new Error("This transaction does not contain the bid in your receipt.");
+    block = Number(rc.blockNumber);
   } else {
     placed = (await find("BidPlaced", { saleId, bidder: receipt.bidder })).find(matches);
     if (!placed) return null;
     tx = placed.transactionHash;
+    block = Number(placed.blockNumber);
   }
 
   const { bidIndex } = placed.args;
@@ -119,7 +133,7 @@ export async function readReceiptBid(receipt) {
     pub.readContract({ ...query, functionName: "getSale", args: [saleId] }),
     pub.readContract({ ...query, functionName: "bids", args: [saleId, bidIndex] }),
   ]);
-  const claim = bid[6] ? (await find("Claimed", { saleId, bidIndex }))[0] : null;
+  const claim = bid[6] ? (await find("Claimed", { saleId, bidIndex }, block))[0] : null;
   return { tx, placed: placed.args, sale, claimed: bid[6], claim };
 }
 

@@ -45,7 +45,7 @@ Built for QoreChain's *Build Before Q-Day* developer fest, category Encrypted Ap
 Open **https://allot.timidan.xyz** (QoreChain testnet; shares are test tokens and stand for nothing). No wallet is needed.
 
 1. **Practise.** The home page replays sale 1 with your bid added. Price it and press *Seal it*: your browser makes an ML-KEM-1024 key and seals all five bids to it. Press *End the sale*: your browser opens every envelope with that key and settles the sale from what it opened.
-2. **Bid.** Open a sale on [/sales](https://allot.timidan.xyz/sales) and press *Place sealed bid as a guest*. Your browser seals the bid, and a guest account with a registered post-quantum key places it on chain. Then press *Open it from the chain*: the bid's page opens your envelope in your browser with the key in your receipt and checks it against the fingerprint the contract stored. One guest bid per visitor a day.
+2. **Bid.** Open a sale on [/sales](https://allot.timidan.xyz/sales), choose the number of editions and your maximum per edition, then press *Leave a sealed bid*. Your browser seals the bid and Allot places it from a funded testnet guest account. Open *My bid* to check your seal, and return there after the close to see the allocation and refund. The private receipt file opens in another browser. Keep it private because it contains your opening key. One guest bid per visitor a day.
 3. **Sell.** On [/sell](https://allot.timidan.xyz/sell), upload an image or a song (JPEG, PNG, WebP, MP3, OGG, WAV or M4A, up to 8 MB), and set the shares, the lowest price and the length. Allot issues the shares and runs the sale. A song's waveform becomes its picture.
 4. **Follow any transaction** on its own page, `/tx/<hash>`, read straight from testnet: what it did, its signature, and the post-quantum pass that let it through.
 
@@ -126,6 +126,8 @@ npm start
 ```
 
 `npm run setup` funds the guest accounts and the listing account from a treasury mnemonic that holds testnet QOR and fUSD (see [`.env.example`](server/.env.example)), and creates the guest mnemonic if it is missing. Run it on your own machine; the server only needs the guest mnemonic.
+
+For one optional backup pair, set `BACKUP_LOTS=11,12` using the IDs of two open Allot-managed lots with the same deposit. The backup must close at least an hour after the first lot’s reveal deadline. The guest enters a separate maximum for the backup. Allot queues its ciphertext and places it only after the first bid was opened, returned the full deposit and delivered no editions. The auction house holds the opening key and decrypts a guest bid to validate it before submitting it. Keep the server’s `DATA` volume across restarts. It holds the signed transaction and receipt status in `guest-bids.json`.
 
 The contract:
 

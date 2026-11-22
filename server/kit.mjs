@@ -22,7 +22,9 @@ export const sale = {
     "function getSale(uint256) view returns ((address issuer, address asset, uint64 closeAt, uint64 openBy, uint128 supply, uint128 reserve, uint128 deposit, uint128 unit, uint128 clearing, uint128 sold, uint128 penaltyShare, uint128 earned, uint128 paid, uint32 opened, bool settled))",
     "function placeBid(uint256 saleId, bytes32 fingerprint, bytes envelope) returns (uint256)",
     "function isHybridHolder(address) view returns (bool)",
+    "function bids(uint256 saleId, uint256 bidIndex) view returns (address bidder, bytes32 fingerprint, uint128 price, uint128 qty, uint128 filled, bool opened, bool claimed)",
     "event BidPlaced(uint256 indexed saleId, uint256 indexed bidIndex, address indexed bidder, bytes32 fingerprint, bytes envelope)",
+    "event Claimed(uint256 indexed saleId, uint256 indexed bidIndex, uint256 assetAmount, uint256 refund)",
   ]),
 };
 

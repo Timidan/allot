@@ -30,7 +30,7 @@ export function readListings() {
   return (listings ??= fetch("/api/listings")
     .then((r) => (r.ok ? r.json() : []))
     .then((ls) => (Array.isArray(ls) ? ls : []).map((l) => ({
-      saleId: l.saleId, closeAt: l.closeAt, done: l.done, ranges: [[l.createBlock, l.createBlock + 9999]],
+      saleId: l.saleId, closeAt: l.closeAt, done: l.done, backupSaleId: l.backupSaleId, ranges: [[l.createBlock, l.createBlock + 9999]],
       lot: {
         title: l.title, artist: l.by, details: l.about, alt: `${l.title}, by ${l.by}`,
         image: l.kind === "image" ? l.file : null, audio: l.kind === "audio" ? l.file : null, peaks: l.peaks ?? "", consigned: true,

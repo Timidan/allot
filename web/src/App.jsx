@@ -31,7 +31,7 @@ const reader = (lot) => (lot.consigned ? "Allot, which runs this sale," : "the s
 const api = async (path, body) => {
   const r = await fetch(path, body ? { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) } : undefined);
   const json = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(json.error ?? "The bid didn't go through. Try again in a minute.");
+  if (!r.ok) throw Object.assign(new Error(json.error ?? "The bid didn't go through. Try again in a minute."), { status: r.status });
   return json;
 };
 // Old bid links can still prefill the form. New lot links carry just the sale ID.
@@ -42,7 +42,7 @@ function startingBid(sale) {
   return { price, shares };
 }
 
-function BidBox({ sale, entry, onPlaced }) {
+function BidBox({ sale, entry, backupEntry, onPlaced }) {
   const saleId = entry.saleId;
   const [price, setPrice] = useState(() => startingBid(sale).price);
   const [shares, setShares] = useState(() => startingBid(sale).shares);
@@ -56,6 +56,19 @@ function BidBox({ sale, entry, onPlaced }) {
   const [help, setHelp] = useState(null); // the setup step that fixes the error, if one does
   const [topup, setTopup] = useState(null); // fUSD Allot can send this account for the deposit, or null
   const [sent, setSent] = useState(""); // what Allot just sent, said plainly
+  const [backupSale, setBackupSale] = useState(null);
+  const [backupLimit, setBackupLimit] = useState(null);
+  useEffect(() => {
+    if (!backupEntry) return;
+    let current = true;
+    readSale(SALE_CONTRACT, backupEntry.saleId).then((state) => { if (current) setBackupSale(state); }, () => {});
+    return () => { current = false; };
+  }, [backupEntry]);
+  const backupOpen = backupEntry && backupSale && !backupSale.settled && backupSale.closeAt > Date.now();
+  const backupPrice = Number(backupLimit);
+  const backupMax = backupSale && Math.floor(backupSale.deposit / shares);
+  const validBackup = backupLimit === null || (backupOpen && shares <= backupSale.supply &&
+    Number.isSafeInteger(backupPrice) && backupPrice >= backupSale.reserve && backupPrice <= backupMax);
 
   // The contract can't see inside a sealed bid, so this box is the only place its size is checked:
   // price × shares may not exceed the deposit, or the bid can never be opened.
@@ -72,23 +85,43 @@ function BidBox({ sale, entry, onPlaced }) {
     setHelp(null);
     setNote("Sealing your bid…");
     setStep(0);
+    let draft;
+    let sentToServer = false;
     try {
+      if (!validBackup) throw new Error("Set a valid maximum for the backup lot or uncheck it.");
       const { guest: bidder } = await api(`/api/guest?sale=${saleId}`);
       setGuest(bidder);
-      const card = await readCard(SALE_CONTRACT, entry);
-      const sealed = await sealBid({ saleContract: SALE_CONTRACT, saleId: saleId, bidder, price: BigInt(price) * DOLLAR, qty: shares, issuer: card.address, card });
-      const draft = parseReceipt({ ...sealed.receipt, fingerprint: sealed.fingerprint });
+      const sealLot = async (lot, limit) => {
+        const card = await readCard(SALE_CONTRACT, lot);
+        return sealBid({ saleContract: SALE_CONTRACT, saleId: lot.saleId, bidder, price: BigInt(limit) * DOLLAR, qty: shares, issuer: card.address, card });
+      };
+      const [sealed, backup] = await Promise.all([sealLot(entry, price), backupLimit === null ? null : sealLot(backupEntry, backupPrice)]);
+      const leg = (bid) => ({ saleId: bid.receipt.saleId, fingerprint: bid.fingerprint, envelope: toHex(bid.envelope) });
+      const requestId = crypto.randomUUID();
+      draft = parseReceipt({
+        ...sealed.receipt, requestId, fingerprint: sealed.fingerprint,
+        ...(backup && { backup: { ...backup.receipt, fingerprint: backup.fingerprint } }),
+      });
       if (!saveReceipt(draft)) throw new Error("Allow this site to save your private receipt, then try again.");
-      setBytes(sealed.envelope.length);
       setStep(1);
-      const placed = await api("/api/bid", { saleId: saleId, guest: bidder, fingerprint: sealed.fingerprint, envelope: toHex(sealed.envelope) });
-      const r = parseReceipt({ ...draft, tx: placed.tx });
-      if (!r.tx) throw new Error("Check My bid for confirmation before trying again.");
+      sentToServer = true;
+      const placed = await api("/api/bid", { ...leg(sealed), guest: bidder, requestId, ...(backup && { backup: leg(backup) }) });
+      if (placed.simulated) {
+        setError("The bid was simulated. No testnet bid was placed.");
+        setStep(-1);
+        return;
+      }
+      const r = placed.tx ? parseReceipt({ ...draft, tx: placed.tx }) : draft;
       saveReceipt(r);
       setReceipt(r);
       setStep(2);
-      onPlaced?.();
+      if (r.tx) onPlaced?.();
     } catch (e) {
+      if (sentToServer && (!e.status || e.status >= 500)) {
+        setReceipt(draft);
+        setStep(2);
+        return;
+      }
       setError(e.message);
       setStep(-1);
     }
@@ -165,11 +198,12 @@ function BidBox({ sale, entry, onPlaced }) {
         ),
       },
       {
-        label: "Done",
+        label: receipt?.tx ? "Done" : "Check",
         content: receipt ? (
           <div className="space-y-3 text-[16px]">
-            <p className="font-semibold">Bid confirmed</p>
+            <p className="font-semibold">{receipt.tx ? "Bid confirmed" : "Check your bid status"}</p>
             <p className="text-muted-foreground">Up to {shares} editions at {price} fUSD each from {own ? "your QoreX account" : "Allot's guest account"} {short(guest)}.</p>
+            {receipt.backup && receipt.tx ? <p className="text-muted-foreground">Backup queued for {backupEntry.lot.title}.</p> : null}
             <p className="flex flex-wrap gap-x-5 gap-y-2">
               <a className="text-accent underline underline-offset-4" href={`/my-bid?bid=${receipt.fingerprint}`}>My bid</a>
               <button className="underline underline-offset-4" onClick={() => downloadReceipt(receipt)} type="button">Download private receipt</button>
@@ -198,12 +232,32 @@ function BidBox({ sale, entry, onPlaced }) {
         <span>Maximum total</span>
         <b className="font-semibold text-foreground">{money(price * shares)}</b>
       </div>
-      <button className="h-13 w-full rounded bg-primary font-semibold text-primary-foreground transition-[background-color,transform] duration-150 hover:bg-accent active:scale-[0.99] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring" onClick={() => { setOwn(false); place(); }} type="button">
+      {backupOpen || backupLimit !== null ? (
+        <div className="mb-4 border-y border-border py-3">
+          <label className="flex items-start gap-3 text-[15px]">
+            <input checked={backupLimit !== null} className="mt-1 size-4 shrink-0 accent-foreground" onChange={(e) => setBackupLimit(e.target.checked ? "" : null)} type="checkbox" />
+            Try {backupEntry?.lot.title ?? "the backup lot"} if I get no editions and the full deposit comes back
+          </label>
+          {backupLimit !== null ? (
+            <label className="mt-3 grid gap-1 pl-7 text-[15px]">
+              Backup maximum per edition in fUSD
+              <input className="min-h-11 w-full border border-border bg-background px-3 focus-visible:outline-2 focus-visible:outline-ring"
+                min={backupSale?.reserve} max={backupMax ?? undefined} onChange={(e) => setBackupLimit(e.target.value)} step={1} type="number" value={backupLimit} />
+              {backupOpen && shares <= backupSale.supply && backupMax >= backupSale.reserve
+                ? <span className="text-muted-foreground">{validBackup ? `Maximum total ${money(backupPrice * shares)}` : `Enter ${backupSale.reserve} to ${backupMax} fUSD per edition.`}</span>
+                : <span className="text-muted-foreground">Choose fewer editions or remove the backup.</span>}
+            </label>
+          ) : null}
+        </div>
+      ) : null}
+      <button className="h-13 w-full rounded bg-primary font-semibold text-primary-foreground transition-[background-color,transform] duration-150 hover:bg-accent active:scale-[0.99] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:opacity-60" disabled={!validBackup} onClick={() => { setOwn(false); place(); }} type="button">
         Leave a sealed bid
       </button>
-      <button className="mt-3 h-12 w-full rounded border border-foreground/40 text-[16px] transition-colors duration-150 hover:bg-foreground hover:text-background focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring" onClick={placeWithQorex} type="button">
-        Use my wallet
-      </button>
+      {backupLimit === null ? (
+        <button className="mt-3 h-12 w-full rounded border border-foreground/40 text-[16px] transition-colors duration-150 hover:bg-foreground hover:text-background focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring" onClick={placeWithQorex} type="button">
+          Use my wallet
+        </button>
+      ) : null}
       {sent ? <p className="mt-3 text-[15px] text-accent" role="status">{sent}</p> : null}
       {error ? (
         <p className="mt-3 text-[15px] text-destructive" role="alert">
@@ -217,7 +271,6 @@ function BidBox({ sale, entry, onPlaced }) {
       <p className="mt-2 text-[15px] text-muted-foreground">
         Your browser seals the bid for you and {entry.lot.consigned ? "Allot, the auction house" : "the seller"}.
       </p>
-      <TestnetHelp />
     </div>
   );
 }
@@ -351,7 +404,7 @@ const Fold = ({ title, children }) => (
 );
 
 // One sale: the lot and the bid (or the result) at the top, both short; the long lists folded below, full width.
-function SalePage({ entry, sale, book, onPlaced }) {
+function SalePage({ entry, sale, book, backupEntry, onPlaced }) {
   const ended = sale && (sale.settled || Date.now() >= sale.closeAt);
   const earlier = SALES.filter((e) => e.saleId !== entry.saleId && e.lot === entry.lot);
   const { lot } = entry;
@@ -377,7 +430,7 @@ function SalePage({ entry, sale, book, onPlaced }) {
           {ended ? (
             sale.settled && sale.sold ? <a className="inline-flex min-h-11 items-center text-[16px] text-accent underline-offset-4 hover:underline" href={`/sales/${entry.saleId}?view=result`}>What a winner saw after the sale →</a> : null
           ) : sale ? (
-            <BidBox entry={entry} onPlaced={onPlaced} sale={sale} />
+            <BidBox backupEntry={backupEntry} entry={entry} onPlaced={onPlaced} sale={sale} />
           ) : (
             <div className="h-[230px] rounded-md border border-border bg-muted" />
           )}
@@ -440,7 +493,7 @@ function ResultPage({ last, book, lot }) {
   );
 }
 
-export const SiteHeader = () => (
+export const SiteHeader = ({ showWallet = true }) => (
   // On a phone the links take a second row, so every page stays one tap away.
   <header className="mx-auto flex max-w-[1360px] flex-wrap items-center gap-x-4 px-5 pt-4 pb-2 md:flex-nowrap md:gap-x-10 md:py-6 md:px-12">
     <a className="flex min-h-11 items-center gap-2 text-lg font-semibold" href="/"><Mark />Allot</a>
@@ -452,7 +505,7 @@ export const SiteHeader = () => (
     <div className="ml-auto flex items-center gap-3 whitespace-nowrap font-mono text-[14px] text-muted-foreground sm:gap-5">
       <span className="hidden sm:inline">Testnet</span>
       <ThemeSwitch className="min-h-11 px-1 py-2 hover:text-foreground" />
-      <WalletButton />
+      {showWallet ? <WalletButton /> : null}
     </div>
   </header>
 );
@@ -539,7 +592,7 @@ export default function App({ saleId }) {
   const result = new URLSearchParams(location.search).get("view") === "result";
   return (
     <>
-      <SiteHeader />
+      <SiteHeader showWallet={false} />
       {error ? <p className="mx-auto max-w-[1360px] px-5 pb-4 text-sm text-destructive md:px-12" role="alert">{error}</p> : null}
       {!entry ? (
         <main className="mx-auto max-w-[1200px] px-5 pb-20 md:px-12">
@@ -548,7 +601,7 @@ export default function App({ saleId }) {
       ) : result && sale?.settled && book ? (
         <ResultPage book={book} last={sale} lot={entry.lot} />
       ) : (
-        <SalePage book={book} entry={entry} onPlaced={load} sale={sale} />
+        <SalePage backupEntry={sales.find((s) => s.saleId === entry.backupSaleId)} book={book} entry={entry} onPlaced={load} sale={sale} />
       )}
     </>
   );

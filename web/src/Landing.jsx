@@ -141,7 +141,8 @@ export default function Landing() {
     readBook(SALE_CONTRACT, lastSale.saleId, lastSale.ranges).then(setBook, fail);
   }, []);
   const sampleOpen = open && !open.settled && open.closeAt > Date.now();
-  const live = listed.find((lot) => !lot.done && lot.closeAt > Date.now());
+  const liveLots = listed.filter((lot) => !lot.done && lot.closeAt > Date.now());
+  const live = liveLots.find((lot) => lot.backupSaleId !== undefined) ?? liveLots[0];
   const bidHref = sampleOpen ? `/sales/${openSale.saleId}` : live ? `/sales/${live.saleId}` : "/sales";
   const bidLabel = sampleOpen ? "Place a bid" : "See an open lot";
 
