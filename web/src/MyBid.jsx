@@ -45,7 +45,7 @@ async function verifyBid(receipt) {
 
 function BidProof({ bid }) {
   const { claim, claimed, sale, terms, tx } = bid;
-  const rows = [["Your sealed bid", `Up to ${terms.qty} at ${amount(terms.price)} each`]];
+  const rows = [["Your sealed bid", `Up to ${terms.qty} shares at ${amount(terms.price)} each`]];
   if (claim) rows.push(
     ["Shares delivered", String(claim.args.assetAmount / sale.unit)],
     ["Clearing price a share", sale.clearing ? amount(sale.clearing) : "No winning bids"],
