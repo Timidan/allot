@@ -29,6 +29,8 @@ function settle(bids, supply, reserve) {
 }
 
 export const NAMES = ["Ana", "Ben", "Chi", "Dee"]; // the last sale's four bidders, in bid order
+// On a phone a bid's envelope or result takes the full width under the bidder's name, so the tiles are not a thin strip.
+const below = "col-span-2 row-start-2 sm:col-span-1 sm:row-start-auto";
 // Takes the focus without scrolling to it, so the opened bids above stay on screen.
 const focusQuietly = (el) => el?.focus({ preventScroll: true });
 const Button = ({ children, quiet, ...p }) => (
@@ -143,7 +145,7 @@ export default function TryAuction({ last, book, bidHref, onPhase }) {
                 <motion.li className="border-b border-foreground/15" key={b.key} layout={open && !still ? "position" : false} transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}>
                   <button
                     aria-label={open ? `${b.who}: ${b.qty} shares at ${b.price} fUSD, won ${won}` : b.mine ? `Your sealed bid: ${b.qty} shares at ${b.price} fUSD` : `${b.who}: sealed`}
-                    className={`grid w-full grid-cols-[5.5rem_minmax(0,1fr)_5.5rem] items-center gap-4 py-3 text-left ${b.mine ? "text-foreground" : ""}`}
+                    className={`grid w-full grid-cols-2 items-center gap-x-4 gap-y-2 py-3 text-left sm:grid-cols-[5.5rem_minmax(0,1fr)_5.5rem] sm:gap-4 ${b.mine ? "text-foreground" : ""}`}
                     onBlur={() => setLooking(null)}
                     onClick={() => setLooking(seen ? null : b.key)}
                     onMouseEnter={() => setLooking(b.key)}
@@ -152,7 +154,7 @@ export default function TryAuction({ last, book, bidHref, onPhase }) {
                   >
                     <span className={`text-[15px] ${b.mine ? "font-semibold" : "text-muted-foreground"}`}>{b.who}</span>
                     {open ? (
-                      <span className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                      <span className={`flex flex-wrap items-center gap-x-4 gap-y-2 ${below}`}>
                         <span className="w-24 text-[18px]">{b.price} <span className="text-[14px] text-muted-foreground">fUSD</span></span>
                         <span className="flex flex-wrap gap-1.5">
                           {Array.from({ length: b.qty }, (_, i) => (
@@ -161,7 +163,7 @@ export default function TryAuction({ last, book, bidHref, onPhase }) {
                         </span>
                       </span>
                     ) : (
-                      <span className="relative block">
+                      <span className={`relative block ${below}`}>
                         <ByteTiles bytes={b.envelope} label={b.mine ? "Your sealed bid" : "A sealed bid"} maxCols={150} pose={phase === "opening" || (b.mine && seen)} text={`${b.qty} × ${b.price} fUSD`} tile={3} />
                         {seen && !b.mine && phase === "sealed" ? (
                           <span className="absolute inset-0 flex items-center justify-center bg-background/85 px-2 text-center text-[15px]">Sealed. It opens when the sale ends.</span>

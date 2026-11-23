@@ -160,9 +160,11 @@ export default function Shatter({ onBeat, caption, children }) {
     // Tall, so the picture stays in place while the scroll breaks it. The row is all that takes up room at the
     // end; until then the picture hangs below it, over the empty stretch. svh, not dvh: a phone's address bar
     // sliding away must not change the heights the scroll is measured against.
-    <div className="min-h-[120svh] motion-reduce:min-h-0" ref={wrap}>
-      {/* Narrower where it would fill its column (a phone, a small laptop), so the pieces that fly right stay on the screen. */}
-      <div className="sticky top-[22svh] w-[86%] max-w-[520px] sm:w-full lg:top-[max(6rem,14svh)] lg:w-[86%] xl:w-full" ref={pin}>
+    <div className="min-h-[max(120svh,40rem)] motion-reduce:min-h-0" ref={wrap}>
+      {/* Narrower where it would fill its column (a phone, a small laptop), so the pieces that fly right stay on the
+          screen; and no wider than a short screen (a phone on its side) can show at full height. A container, so
+          the caption can keep a gap that grows with the picture. */}
+      <div className="@container sticky top-[22svh] w-[86%] max-w-[min(520px,calc((68svh_-_6rem)_*_1.6))] sm:w-full lg:top-[max(6rem,14svh)] lg:w-[86%] xl:w-full" ref={pin}>
         {caption}
         <div className="relative">
           <div style={{ aspectRatio: `1 / ${ROW}` }} />

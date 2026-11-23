@@ -141,8 +141,9 @@ function How({ last, book, bidHref, down }) {
       }
       title="How a secret&#8209;bid sale works"
     >
-      {/* On a phone the list has scrolled away by now, so the step being played is named above the picture. */}
-      <Shatter caption={<p aria-hidden="true" className="mb-10 text-[17px] leading-snug lg:hidden">{STEPS[Math.min(beat, 2) - 1]}</p>} onBeat={onBeat}>
+      {/* On a phone the list has scrolled away by now, so the step being played is named above the picture, far enough
+          above it (a share of its width) that the pieces flying up do not cover the words. */}
+      <Shatter caption={<p aria-hidden="true" className="mb-[16cqw] text-[17px] leading-snug lg:hidden">{STEPS[Math.min(beat, 2) - 1]}</p>} onBeat={onBeat}>
         <p className="mt-4 text-[17px]">{SHARES} shares{last ? `, from ${money(last.reserve)} a share` : ""}.</p>
       </Shatter>
       <div className="mt-12">{last && book ? <TryAuction bidHref={bidHref} book={book} last={last} onPhase={onPhase} /> : <Waiting down={down} />}</div>
