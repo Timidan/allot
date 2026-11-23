@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ByteTiles from "./ByteTiles.jsx";
 import Countdown from "./Countdown.jsx";
 import SeaShader from "./SeaShader.jsx";
+import Shatter, { SHARES } from "./Shatter.jsx";
 import TryAuction from "./TryAuction.jsx";
 import { rangesOf, readBook, readSale, readWindow } from "./lib/chain.js";
-import { SALE_CONTRACT, lastSale, openSale, painting, readListings, short } from "./sale.js";
+import { SALE_CONTRACT, lastSale, money, openSale, painting, readListings, short } from "./sale.js";
 import { ThemeSwitch } from "./theme.jsx";
 
 // A share split four ways, one taken: the mark.
@@ -26,10 +27,11 @@ const H2 = ({ children }) => <h2 className="max-w-[24ch] text-balance text-[30px
 const Sub = ({ children }) => <p className="mt-4 max-w-[40ch] text-pretty text-[17px] leading-normal text-muted-foreground">{children}</p>;
 // Every section and the footer share one grid: heading on the left (5 of 12 columns), the working part on the right.
 const Grid = ({ children }) => <div className="max-w-[1344px] lg:grid lg:grid-cols-12 lg:gap-x-12">{children}</div>;
-const Section = ({ id, title, sub, children }) => (
-  <section className="border-t border-foreground/10 px-6 py-20 md:px-12 md:py-28" id={id}>
+// `pin` keeps the heading column in view while a long working part scrolls past it.
+const Section = ({ id, title, sub, pin, children }) => (
+  <section className="overflow-x-clip border-t border-foreground/10 px-6 py-20 md:px-12 md:py-28" id={id}>
     <Grid>
-      <div className="lg:col-span-5"><H2>{title}</H2>{sub}</div>
+      <div className="lg:col-span-5"><div className={pin ? "lg:sticky lg:top-[max(6rem,14svh)]" : ""}><H2>{title}</H2>{sub}</div></div>
       <div className="mt-10 lg:col-span-7 lg:mt-0">{children}</div>
     </Grid>
   </section>
@@ -78,7 +80,7 @@ const PassRow = ({ what, how, tx }) => (
   <li className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1 border-b border-foreground/15 py-3 text-[17px]">
     <span className="sm:w-48">{what}</span>
     <span className="order-last w-full text-muted-foreground sm:order-none sm:w-auto sm:flex-1">{how}</span>
-    {tx ? <a aria-label={`See it: ${what} on QoreChain testnet`} className={`${link} ${tap}`} href={`/tx/${tx}`}>See it →</a> : null}
+    {tx ? <a aria-label={`Transaction: ${what} on QoreChain testnet`} className={`${link} ${tap}`} href={`/tx/${tx}`}>Transaction</a> : null}
   </li>
 );
 
@@ -110,6 +112,41 @@ function Pass({ sealed, book, down }) {
         <Waiting className="mt-10" down={down || w === false} />
       )}
     </>
+  );
+}
+
+// One sale, start to end. The scroll plays the first two steps; the visitor plays the rest in the practice sale.
+const STEPS = ["The lot is broken into shares", "The shares go on sale", "Each bidder enters a secret amount", "No other bidder can read a bid before the close, not even with a quantum computer", "At the close, every bid opens"];
+function How({ last, book, bidHref, down }) {
+  const [beat, setBeat] = useState(1); // from the scroll: 1, 2, then 3 once it has played the break through
+  const [phase, setPhase] = useState("pick");
+  const [lead, setLead] = useState("scroll"); // whichever moved last, the scroll or the practice sale, marks the step
+  const onBeat = useCallback((b) => { setBeat(b); setLead("scroll"); }, []);
+  const onPhase = useCallback((p) => { setPhase(p); if (p !== "pick") setLead("sale"); }, []);
+  const stage = phase === "pick" || phase === "sealing" ? 3 : phase === "sealed" ? 4 : 5;
+  const now = lead === "scroll" && beat < 3 ? beat : stage;
+  return (
+    <Section
+      id="how"
+      pin
+      sub={
+        <>
+          <Sub>Ana, Ben, Chi and Dee have already bid. Your turn.</Sub>
+          <ol className="mt-8 max-w-[40ch] list-decimal space-y-3 pl-7 text-[17px] leading-snug text-muted-foreground">
+            {STEPS.map((step, i) => (
+              <li aria-current={now === i + 1 ? "step" : undefined} className={`transition-colors duration-300 ${now === i + 1 ? "text-foreground" : ""}`} key={step}>{step}</li>
+            ))}
+          </ol>
+        </>
+      }
+      title="How a secret&#8209;bid sale works"
+    >
+      {/* On a phone the list has scrolled away by now, so the step being played is named above the picture. */}
+      <Shatter caption={<p aria-hidden="true" className="mb-10 text-[17px] leading-snug lg:hidden">{STEPS[Math.min(beat, 2) - 1]}</p>} onBeat={onBeat}>
+        <p className="mt-4 text-[17px]">{SHARES} shares{last ? `, from ${money(last.reserve)} a share` : ""}.</p>
+      </Shatter>
+      <div className="mt-12">{last && book ? <TryAuction bidHref={bidHref} book={book} last={last} onPhase={onPhase} /> : <Waiting down={down} />}</div>
+    </Section>
   );
 }
 
@@ -175,7 +212,7 @@ export default function Landing() {
                 Bid without being seen.<br />Even after Q&#8209;Day.
               </h1>
               <p className="mt-6 max-w-[44ch] text-pretty text-[17px] leading-normal text-foreground/80 md:text-[19px]">
-                Allot is a secret-bid marketplace on QoreChain for shares of real things: art, a song, a fund. Each bid is sealed in your browser with post-quantum encryption (ML&#8209;KEM&#8209;1024), so no other bidder can read it before the sale ends, not even with a quantum computer. When time runs out, every bid is opened on chain, the best bids win, and every winner pays the same price.
+                Secret-bid sales on QoreChain for shares of real things: art, a song, a fund. Your browser seals each bid with post-quantum encryption (ML&#8209;KEM&#8209;1024), so no other bidder can read it before the close, even with a quantum computer. At the close, every bid opens on chain, the best win, and every winner pays the same price.
               </p>
             </div>
           </div>
@@ -184,14 +221,12 @@ export default function Landing() {
             <div className="mt-3 font-sans text-[16px] font-semibold">{painting.title}</div>
             <div className="text-[13px] text-muted-foreground">{painting.artist}, 1909. Testnet sample</div>
             <Facts className="mt-3 text-[13px] text-foreground/80" open={open} />
-            <a className={`mt-3 flex min-h-11 items-center justify-center bg-foreground px-3 py-2 text-[14px] text-background hover:bg-accent ${press}`} href={bidHref}>{bidLabel} →</a>
+            <a className={`mt-3 flex min-h-11 items-center justify-center bg-foreground px-3 py-2 text-[14px] text-background hover:bg-accent ${press}`} href={bidHref}>{bidLabel}</a>
           </aside>
         </div>
       </section>
 
-      <Section id="how" sub={<Sub>10 shares of {painting.title} are for sale. Ana, Ben, Chi and Dee have already bid. Your turn.</Sub>} title="How a secret&#8209;bid sale works">
-        {last && book ? <TryAuction bidHref={bidHref} book={book} last={last} /> : <Waiting down={down} />}
-      </Section>
+      <How bidHref={bidHref} book={book} down={down} last={last} />
 
       <Section
         id="why"
@@ -200,7 +235,7 @@ export default function Landing() {
             <Sub>Bids stay sealed for days. QoreChain seals them with post-quantum encryption, so even a quantum computer can't open them early.</Sub>
             <Sub>
               The usual seal is drawn for comparison. The QoreChain seal is the envelope of Ana's real bid. That sale has ended, so its seller has opened her bid on chain; the envelope itself still can't be broken.{" "}
-              {book?.[0] ? <a aria-label="See it: Ana's bid on QoreChain testnet" className={link} href={`/tx/${book[0].tx}`}>See it →</a> : null}
+              {book?.[0] ? <a aria-label="See Ana's bid on QoreChain testnet" className={link} href={`/tx/${book[0].tx}`}>See Ana's bid</a> : null}
             </Sub>
           </>
         }
@@ -222,7 +257,7 @@ export default function Landing() {
           <img alt={painting.alt} className={`aspect-[16/10] w-full object-cover sm:w-[300px] ${outlined}`} src={painting.image} />
           <div className="flex-1">
             <Facts className="text-[17px]" open={open} />
-            <a className={`mt-6 flex h-12 items-center justify-center bg-foreground text-[16px] text-background hover:bg-accent ${press}`} href={bidHref}>{bidLabel} →</a>
+            <a className={`mt-6 flex h-12 items-center justify-center bg-foreground text-[16px] text-background hover:bg-accent ${press}`} href={bidHref}>{bidLabel}</a>
           </div>
         </div>
       </Section>

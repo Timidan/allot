@@ -1,5 +1,5 @@
 import { motion, useReducedMotion } from "motion/react";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { generateSealKeys, open, recipientOf, seal as sealTo } from "@qorechain/qoreseal";
 import DigitRoll from "@/components/smoothui/digit-roll";
 import ByteTiles from "./ByteTiles.jsx";
@@ -29,6 +29,8 @@ function settle(bids, supply, reserve) {
 }
 
 export const NAMES = ["Ana", "Ben", "Chi", "Dee"]; // the last sale's four bidders, in bid order
+// Takes the focus without scrolling to it, so the opened bids above stay on screen.
+const focusQuietly = (el) => el?.focus({ preventScroll: true });
 const Button = ({ children, quiet, ...p }) => (
   <button
     className={`h-12 px-5 text-[16px] transition-[background-color,color,scale] duration-150 motion-safe:active:scale-[0.96] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring ${quiet ? "border border-foreground/40 hover:bg-foreground hover:text-background" : "bg-foreground text-background hover:bg-accent"}`}
@@ -39,7 +41,8 @@ const Button = ({ children, quiet, ...p }) => (
   </button>
 );
 
-export default function TryAuction({ last, book, bidHref }) {
+// `onPhase` tells the page where the practice sale stands, so its list of steps can mark the current one.
+export default function TryAuction({ last, book, bidHref, onPhase }) {
   const [price, setPrice] = useState(26);
   const [shares, setShares] = useState(3);
   const [mine, setMine] = useState(null); // once sealed: { keys, envelopes: { [bid key]: envelope } }
@@ -50,6 +53,7 @@ export default function TryAuction({ last, book, bidHref }) {
   const still = useReducedMotion();
   const again = useRef(false); // after "Try again" or "Change my bid", focus returns to "Seal it"
   const { supply, reserve, deposit } = last;
+  useEffect(() => onPhase?.(phase), [onPhase, phase]);
 
   // Same limits as the real bid box: price × shares stays within the deposit.
   const onPrice = (v) => {
@@ -185,18 +189,18 @@ export default function TryAuction({ last, book, bidHref }) {
                 <p className="text-[56px] leading-none tracking-[-0.04em] md:text-[72px]">
                   {result.clearing.toFixed(2)} <span className="text-[24px] tracking-normal md:text-[28px]">fUSD</span>
                 </p>
-                <p className="mt-3 max-w-[40ch] text-[18px]">Everyone pays {money(result.clearing)}, the lowest winning price.</p>
+                <p className="mt-3 max-w-[40ch] text-[18px]">The lowest winning price.</p>
                 <p className="mt-1 text-[17px] text-muted-foreground">
                   {you
-                    ? `You bid ${money(price)} a share but pay the clearing price like every winner: ${you} × ${money(result.clearing)} = ${money(you * result.clearing)}, and ${money(deposit - you * result.clearing)} of your ${money(deposit)} deposit comes back.`
+                    ? `You bid ${money(price)} a share but pay the clearing price like every winner: ${you} × ${money(result.clearing)} = ${money(you * result.clearing)}. Of your ${money(deposit)} deposit, ${money(deposit - you * result.clearing)} comes back.`
                     : `You won none, so your ${money(deposit)} deposit comes back.`}
                 </p>
-                <p className="mt-4 text-[16px] text-muted-foreground">{NAMES.slice(0, book.length).join(", ").replace(/, ([^,]*)$/, " and $1")}'s bids are real: this painting's last sale.</p>
+                <p className="mt-4 text-[16px] text-muted-foreground">{NAMES.slice(0, book.length).join(", ").replace(/, ([^,]*)$/, " and $1")}'s bids are real, from this painting's last sale.</p>
               </div>
               <div className="flex flex-wrap gap-3">
-                <Button autoFocus onClick={replay} quiet>Try again</Button>
+                <Button onClick={replay} quiet ref={focusQuietly}>Try again</Button>
                 <a className="inline-flex min-h-12 items-center bg-foreground px-5 py-3 text-[16px] text-background transition-[background-color,color,scale] duration-150 hover:bg-accent motion-safe:active:scale-[0.96]" href={bidHref}>
-                  Try a live sale →
+                  Try a live sale
                 </a>
               </div>
             </div>
