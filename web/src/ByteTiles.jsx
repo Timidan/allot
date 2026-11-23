@@ -162,7 +162,8 @@ export default function ByteTiles({ bytes, text, mode: playOnce, pose, tile: wid
   return (
     <div className="w-full" ref={box}>
       <div className="relative w-fit">
-        <canvas aria-label={label} className="block" ref={canvas} role="img" style={{ imageRendering: "pixelated" }} />
+        {/* Sized 0 until the tiles are measured: a canvas is 300 × 150 by default, which made the page jump when a list of these appeared. */}
+        <canvas aria-label={label} className="block" height={0} ref={canvas} role="img" style={{ imageRendering: "pixelated" }} width={0} />
         <div aria-hidden="true" className="pointer-events-none absolute inset-0" style={gaps(tile)} />
       </div>
     </div>
