@@ -56,6 +56,20 @@ Open **https://allot.timidan.xyz** (QoreChain testnet; shares are test tokens an
 3. **Sell.** On [/sell](https://allot.timidan.xyz/sell), upload an image or a song (JPEG, PNG, WebP, MP3, OGG, WAV or M4A, up to 8 MB), and set the shares, the lowest price and the length. Allot issues the shares and runs the sale. A song's waveform becomes its picture.
 4. **Follow any transaction** on its own page, `/tx/<hash>`, read straight from testnet: what it did, its signature, and the post-quantum pass that let it through.
 
+### From an agent or a script
+
+The same guest route works without a browser. [`web/agent.mjs`](web/agent.mjs) seals with the site's own code and prints JSON, so a program can list, bid and read its result with no wallet:
+
+```bash
+cd web && npm install
+node agent.mjs lots                           # lots open now: shares, lowest price, deposit, close time
+node agent.mjs bid 10 2 4                     # sale 10: up to 2 shares at up to 4 fUSD each; writes a private receipt file
+node agent.mjs result allot-bid-1a2b3c4d.json # opens your own bid from the chain; after the close, shares won and deposit returned
+node agent.mjs list cover.png --title "Cover" --by "An agent" --rights
+```
+
+The bid is sealed on the caller's machine and placed by one of Allot's guest accounts. The receipt file holds the only key, apart from the sale's key holders', that opens the bid; the *My bid* page reads the same file. The guest limits apply: one guest bid and one listing per visitor a day. Set `ALLOT` to use another server.
+
 To bid from your own wallet, use QoreX on testnet: the browser extension, or the dApp browser in its mobile app. Bids come from an Ethereum (coin 60) account in QoreX, with QOR and fUSD from [QoreChain's faucet](https://dashboard.qorechain.io/faucet), and an EVM access window opened in QoreX.
 
 ## How a sale works
@@ -157,6 +171,7 @@ forge test
 | [`contracts/`](contracts) | `SealedSale.sol` (sealed-bid, uniform-price sale with the PQC holder check) and its Foundry tests |
 | [`web/`](web) | The site: Vite, React 19, Tailwind 4, viem. Pages in [`web/src`](web/src): home, sales, one sale, sell, transaction |
 | [`web/src/lib/`](web/src/lib) | Sealing (`bid.js`), chain reads (`chain.js`), QoreX (`qorex.js`) |
+| [`web/agent.mjs`](web/agent.mjs) | The command-line client for agents and scripts: lots, bid, result, list |
 | [`server/`](server) | Guest bids and listings ([`guest.mjs`](server/guest.mjs)), token issuing and the keeper ([`consign.mjs`](server/consign.mjs)), the split-bid format shared with the browser ([`split.mjs`](server/split.mjs)), the second key holder ([`witness.mjs`](server/witness.mjs)), chain helpers ([`kit.mjs`](server/kit.mjs)), guest funding ([`setup-guests.mjs`](server/setup-guests.mjs)) |
 | [`server/kit/`](server/kit) | The Asset Kit's CMTAT build used for listed items |
 
