@@ -25,7 +25,8 @@ function useSales() {
   return { sales: [...SALES, ...(extra ?? [])].sort((a, b) => b.saleId - a.saleId), ready: extra !== null };
 }
 // Who can read a sealed bid before the close: the seller, or Allot when it runs the sale for an owner.
-const reader = (lot) => (lot.consigned ? "Allot, which runs this sale," : "the seller");
+// Who can read a sealed bid before the close. In a split sale no single key can: it takes two of the sale's three.
+const reader = (lot) => (lot.split ? "two of this sale's three key holders together" : lot.consigned ? "Allot, which runs this sale," : "the seller");
 
 // The guest server: hands out a guest account, then places the bid sealed for it. Errors come back as plain words.
 const api = async (path, body) => {
@@ -270,7 +271,9 @@ function BidBox({ sale, entry, backupEntry, onPlaced }) {
         You may win fewer shares, and every winner pays the clearing price. As a guest, Allot supplies the {sale.deposit} fUSD deposit, and the shares and refund go to its guest account.
       </p>
       <p className="mt-2 text-[15px] text-muted-foreground">
-        Sealed in your browser with ML-KEM-1024 to {entry.lot.consigned ? "Allot's" : "the seller's"} registered key, <span className="font-mono text-[14px]" title={sale.issuer}>{short(sale.issuer)}</span>, and to a key in your receipt. Other bidders can't read it; {entry.lot.consigned ? "Allot, which runs this sale," : "the seller"} can.
+        {entry.lot.split
+          ? <>Sealed in your browser with ML-KEM-1024 to a key in your receipt. That key is cut in three pieces, each sealed to a different registered key holder: any two can open your bid, no one of them alone. Other bidders can't read it.</>
+          : <>Sealed in your browser with ML-KEM-1024 to {entry.lot.consigned ? "Allot's" : "the seller's"} registered key, <span className="font-mono text-[14px]" title={sale.issuer}>{short(sale.issuer)}</span>, and to a key in your receipt. Other bidders can't read it; {reader(entry.lot)} can.</>}
       </p>
       <TestnetHelp />
     </div>

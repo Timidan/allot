@@ -3,10 +3,11 @@
 // The keeper works from chain state only, so a restart is safe.
 import { readFileSync } from "node:fs";
 import { REGISTER_KEM_KEY_TYPE_URL, buildRegisterPqcKeyMsg, signProofOfPossession } from "@qorechain/sdk";
-import { deriveSealKeys, open, signRecipientCard } from "@qorechain/qoreseal";
+import { deriveSealKeys, envelopeSize, open, parseEnvelope, recipientHint, sealKeysFromSeed, signRecipientCard } from "@qorechain/qoreseal";
 import { fetchKemKey } from "@qorechain/qoreseal/network";
 import { decodeEventLog, encodeAbiParameters, hexToBytes, keccak256, parseAbi, toBytes, zeroAddress } from "viem";
 import { CHAIN_ID, REST, SALE, chain, pub } from "./kit.mjs";
+import { HOLDERS, isSplit, pieceAad, piecePurpose, rebuild, splitBidPurpose, unpack } from "./split.mjs";
 
 const RULE = "0x5d7a6de418a3d7d3c280c7e1856830942d394872"; // the Asset Kit holder rule: holders need a registered ML-DSA-87 key
 const TOKEN = JSON.parse(readFileSync(new URL("./kit/CMTATStandalone.json", import.meta.url), "utf8"));
@@ -33,27 +34,81 @@ const purpose = (saleId) => `allot:bid:v1:${SALE.toLowerCase()}:${saleId}`;
 const fingerprintOf = (saleId, bidder, price, qty, salt) =>
   keccak256(encodeAbiParameters([{ type: "uint256" }, { type: "address" }, { type: "uint128" }, { type: "uint128" }, { type: "bytes32" }], [BigInt(saleId), bidder, BigInt(price), BigInt(qty), salt]));
 
-// Opens one sealed bid with the issuer's keys and checks it the way the contract will at opening. Returns the bid,
-// or null with the reason in `why` when it could never be opened (so the keeper skips it and the guest server
-// refuses to place it).
-export function checkBid(keys, saleId, bidder, fingerprint, envelopeHex, deposit) {
-  let bid, price, qty;
+// The checks the contract will make at opening, on a bid's opened contents. Returns the bid, or the reason in `why`.
+// A sealed bid is untrusted input: anything malformed is skipped, so it can't stop the sale's other bids opening.
+function checkOpened(plaintext, saleId, bidder, fingerprint, deposit) {
   try {
-    bid = JSON.parse(new TextDecoder().decode(open({ chainId: CHAIN_ID, purpose: purpose(saleId), envelope: hexToBytes(envelopeHex), keys })));
-  } catch {
-    return { why: "it can't be opened" };
-  }
-  // A sealed bid is untrusted input: anything malformed is skipped, so it can't stop the sale's other bids opening.
-  try {
-    price = BigInt(bid.price);
-    qty = BigInt(bid.qty);
+    const bid = JSON.parse(new TextDecoder().decode(plaintext));
+    const [price, qty] = [BigInt(bid.price), BigInt(bid.qty)];
     if (!/^0x[0-9a-fA-F]{64}$/.test(bid.salt)) return { why: "its salt is malformed" };
     if (price <= 0n || qty <= 0n || price >= 2n ** 128n || qty >= 2n ** 128n || price * qty > BigInt(deposit)) return { why: "price × shares exceeds the deposit" };
     if (fingerprintOf(saleId, bidder, price, qty, bid.salt) !== fingerprint) return { why: "it doesn't match its fingerprint" };
+    return { price, qty, salt: bid.salt };
   } catch {
     return { why: "its contents are malformed" };
   }
-  return { price, qty, salt: bid.salt };
+}
+
+// Opens one single-key bid with the issuer's keys and checks it. Returns the bid, or the reason in `why` when it
+// could never be opened (so the keeper skips it and the guest server refuses to place it).
+export function checkBid(keys, saleId, bidder, fingerprint, envelopeHex, deposit) {
+  let plaintext;
+  try {
+    plaintext = open({ chainId: CHAIN_ID, purpose: purpose(saleId), envelope: hexToBytes(envelopeHex), keys });
+  } catch {
+    return { why: "it can't be opened" };
+  }
+  return checkOpened(plaintext, saleId, bidder, fingerprint, deposit);
+}
+
+// ---- Split bids: no single key opens one (see split.mjs). ----
+
+const same = (x, y) => x.length === y.length && x.every((v, i) => v === y[i]);
+// One sealed piece, read without opening it: which key it is addressed to, and that it is the size of a piece.
+const PIECE_BYTES = envelopeSize({ recipients: 1, plaintextLength: 64 });
+function addressedTo(sealed, mlkemPublicKey) {
+  try {
+    const { salt, entries, anonymous } = parseEnvelope(sealed);
+    return !anonymous && entries.length === 1 && sealed.length === PIECE_BYTES && same(entries[0].hint, recipientHint(salt, mlkemPublicKey));
+  } catch {
+    return false;
+  }
+}
+
+// This holder's own piece of a split bid: { holder, piece }, or null when no piece is sealed to these keys for
+// this sale and this bid. One piece says nothing about the bid.
+export function ownPiece(keys, saleId, fingerprint, envelope) {
+  const parts = unpack(envelope);
+  const holder = parts ? parts.pieces.findIndex((sealed) => addressedTo(sealed, keys.mlkemPublicKey)) : -1;
+  if (holder < 0) return null;
+  try {
+    return { holder, piece: open({ chainId: CHAIN_ID, purpose: piecePurpose(SALE, saleId), envelope: parts.pieces[holder], keys, aad: pieceAad(fingerprint, holder) }) };
+  } catch {
+    return null;
+  }
+}
+
+// What one holder can check when a split bid arrives, without being able to read it: it is well formed, each piece
+// is addressed to its holder's registered key, and this holder's own piece opens. `holders` are the three ML-KEM
+// keys in the sale's order. A bid built to pass this and still not open exists; it is left unopened at the close.
+export function checkSplit(keys, holders, saleId, fingerprint, envelopeHex) {
+  const parts = unpack(hexToBytes(envelopeHex));
+  if (!parts) return { why: "it is not a well-formed sealed bid" };
+  if (holders.length !== HOLDERS || parts.bid.length > 4096 || !parts.pieces.every((sealed, i) => addressedTo(sealed, holders[i]))) return { why: "it is not sealed to this sale's three key holders" };
+  if (!ownPiece(keys, saleId, fingerprint, hexToBytes(envelopeHex))) return { why: "its key piece can't be opened" };
+  return {};
+}
+
+// Opens a split bid from two holders' pieces and checks it like any other. `mine` and `theirs` are { holder, piece }.
+export function openSplit(mine, theirs, saleId, bidder, fingerprint, envelope, deposit) {
+  let plaintext;
+  try {
+    const seed = rebuild(mine.holder, mine.piece, theirs.holder, theirs.piece);
+    plaintext = open({ chainId: CHAIN_ID, purpose: splitBidPurpose(SALE, saleId), envelope: unpack(envelope).bid, keys: sealKeysFromSeed(seed) });
+  } catch {
+    return { why: "it can't be opened" };
+  }
+  return checkOpened(plaintext, saleId, bidder, fingerprint, deposit);
 }
 
 // Readies the issuer once: its ML-DSA-87 key, its encryption key, and the card bidders seal to. Returns the card.
@@ -104,8 +159,9 @@ export async function bidsOf(saleId, fromBlock, toBlock) {
 }
 
 // After the close: open what can be opened, settle, claim every bid, pay proceeds. Each step is skipped when the
-// chain shows it done. Returns true once the sale is fully finished.
-export async function finish(kit, a, keys, listing, log = () => {}) {
+// chain shows it done. Returns true once the sale is fully finished. `others(saleId, blocks)` asks the other key
+// holders for their pieces of the sale's split bids: { [bidIndex]: { holder, piece } }.
+export async function finish(kit, a, keys, listing, log = () => {}, others = async () => ({})) {
   const id = BigInt(listing.saleId);
   let s = await pub.readContract({ ...sale, functionName: "getSale", args: [id] });
   const now = (await pub.getBlock()).timestamp;
@@ -119,9 +175,20 @@ export async function finish(kit, a, keys, listing, log = () => {}) {
   await kit.ensureWindow(a);
   if (!s.settled && now < s.openBy) {
     const opened = [];
+    const waiting = placed.filter(({ args: e }, i) => !state[i][5] && isSplit(hexToBytes(e.envelope)));
+    // A holder that can't be reached leaves the split bids for the next round; it doesn't make them junk.
+    const theirs = waiting.length ? await others(id, [...new Set(waiting.map((e) => Number(e.blockNumber)))]).catch((x) => (log(`sale ${id}: the other key holders didn't answer (${x.message})`), null)) : {};
     for (const [i, { args: e }] of placed.entries()) {
       if (state[i][5]) continue; // already opened
-      const bid = checkBid(keys, id, e.bidder, e.fingerprint, e.envelope, s.deposit);
+      const envelope = hexToBytes(e.envelope);
+      let bid;
+      if (!isSplit(envelope)) bid = checkBid(keys, id, e.bidder, e.fingerprint, e.envelope, s.deposit);
+      else if (!theirs) continue;
+      else {
+        const mine = ownPiece(keys, id, e.fingerprint, envelope);
+        const other = theirs[e.bidIndex];
+        bid = mine && other && other.holder !== mine.holder ? openSplit(mine, other, id, e.bidder, e.fingerprint, envelope, s.deposit) : { why: "two key holders' pieces are needed and one is missing" };
+      }
       if (bid.why) log(`sale ${id} bid ${e.bidIndex}: left unopened, ${bid.why}`);
       else opened.push({ index: e.bidIndex, ...bid });
     }

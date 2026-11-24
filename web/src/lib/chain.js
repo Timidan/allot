@@ -25,8 +25,10 @@ export async function readCard(address, s) {
   ]);
   if (!e) throw new Error("Couldn't find this sale's sealing key on QoreChain testnet. Try again in a minute.");
   const card = JSON.parse(e.args.issuerCard);
-  if (card.address !== toQorAddress(sale.issuer)) throw new Error("This sale's sealing key doesn't belong to its seller, so Allot won't seal a bid to it.");
-  return card;
+  // A split sale publishes three cards, the seller's first; bid.js checks all three against the chain.
+  const owner = card.v === 2 ? card.members?.[0]?.address : card.address;
+  if (owner !== toQorAddress(sale.issuer)) throw new Error("This sale's sealing key doesn't belong to its seller, so Allot won't seal a bid to it.");
+  return { ...card, address: owner };
 }
 const dollars = (x) => Number(x) / 1e6; // fUSD has 6 decimals
 

@@ -4,16 +4,20 @@
 // runs its sale; a keeper settles each one after its close. See consign.mjs.
 // Env: GUESTS_MNEMONIC (or GUESTS_MNEMONIC_FILE), GUESTS (count, default 2), PORT (8787), DATA (./data),
 // CONSIGN (account index, default 100), PUBLIC (the site's origin, for file links in token terms).
+// Split bids: HOLDER_CARDS_FILE (the other two key holders' cards, a JSON array; with it, new listings take bids that
+// no single key opens) and HOLDERS_AT (comma-separated addresses to ask those holders for their pieces after a close).
 import { createHash, randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync, mkdirSync, existsSync, createReadStream } from "node:fs";
 import http from "node:http";
-import { OPEN_FOR, bidsOf, checkBid, createListing, finish, setupIssuer } from "./consign.mjs";
+import { fetchKemKey } from "@qorechain/qoreseal/network";
+import { hexToBytes } from "viem";
+import { OPEN_FOR, bidsOf, checkBid, checkSplit, createListing, finish, setupIssuer } from "./consign.mjs";
 import { guestBids, guestBidStatus, requestIdPattern } from "./guest-bids.mjs";
-import { FUSD, SALE, fusd as fusdContract, makeKit, pub, sale } from "./kit.mjs";
+import { FUSD, REST, SALE, fusd as fusdContract, makeKit, pub, sale } from "./kit.mjs";
 const fusdAbi = fusdContract.abi;
 
 const ISSUER = "0xCc7BfdE6Ed012e6E90B32D01979B87e34Ac00464"; // the treasury issuer of the sample sales
-const MAX_ENVELOPE = 4096;
+const MAX_ENVELOPE = 8192; // a split bid is the sealed bid and three sealed key pieces, about 7,250 bytes
 const BACKUP_BUFFER = 3600n;
 const pilot = process.env.BACKUP_LOTS?.trim();
 if (pilot && !/^\d{1,6},\d{1,6}$/.test(pilot)) throw new Error("Set BACKUP_LOTS to two sale IDs separated by a comma.");
@@ -161,8 +165,14 @@ async function place(value, visitor) {
   }
   // In a sale Allot runs, the server holds the opening key: refuse a bid that could never be opened, so it can't
   // hold up the sale's settlement until the opening deadline.
+  // In a split sale the server holds one key of three and can't read the bid: it checks what one holder can.
   if (s.issuer.toLowerCase() === consignor.evm.toLowerCase()) {
-    const bid = checkBid((await readyIssuer()).keys, saleId, g.evm, fingerprint, envelope, s.deposit);
+    const { keys } = await readyIssuer();
+    const holders = (id) => listings.find((l) => l.saleId === id)?.holders;
+    if (second && (holders(saleId) || holders(second.saleId))) throw Object.assign(new Error("A backup bid isn't offered in this sale."), { status: 409 });
+    const bid = holders(saleId)
+      ? checkSplit(keys, await holderKeys(holders(saleId)), saleId, fingerprint, envelope)
+      : checkBid(keys, saleId, g.evm, fingerprint, envelope, s.deposit);
     if (bid.why) throw Object.assign(new Error(`This bid can't be placed: ${bid.why}.`), { status: 400 });
   }
   return serial(g.evm, async () => {
@@ -231,6 +241,32 @@ const DEPOSIT = 10_000_000n; // 10 fUSD: small, so the two guests' float covers 
 const LENGTHS = [600, 3600, 86400, 259200]; // 10 minutes, 1 hour, 1 day, 3 days
 const PER_DAY = 20; // listings a day in all
 const lastListing = new Map(); // visitor -> time of their last listing (memory only, like guest bids)
+// The other two holders of a split bid's key. Their cards are public; their keys never come near this server.
+const otherCards = process.env.HOLDER_CARDS_FILE ? JSON.parse(readFileSync(process.env.HOLDER_CARDS_FILE, "utf8")) : null;
+if (otherCards && (!Array.isArray(otherCards) || otherCards.length !== 2)) throw new Error("HOLDER_CARDS_FILE holds the other two key holders' cards.");
+const holdersAt = (process.env.HOLDERS_AT ?? "").split(",").map((u) => u.trim()).filter(Boolean);
+const kemKeys = new Map(); // holder address -> its registered ML-KEM-1024 key
+const holderKeys = (addresses) => Promise.all(addresses.map(async (address) => {
+  if (!kemKeys.has(address)) kemKeys.set(address, (await fetchKemKey({ rest: REST, address })).publicKey);
+  return kemKeys.get(address);
+}));
+// After a close, the other holders' pieces of a sale's split bids. Throws when none of them answers.
+async function askHolders(saleId, blocks) {
+  const out = {};
+  let answered = 0;
+  for (const at of holdersAt) {
+    try {
+      const r = await fetch(`${at}/pieces`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ saleId: Number(saleId), blocks }), signal: AbortSignal.timeout(60_000) });
+      if (!r.ok) continue;
+      answered++;
+      for (const [index, p] of Object.entries((await r.json()).pieces)) out[index] ??= { holder: p.holder, piece: hexToBytes(p.piece) };
+    } catch {
+      // unreachable: try the next holder
+    }
+  }
+  if (!answered) throw new Error(holdersAt.length ? "none could be reached" : "HOLDERS_AT is not set");
+  return out;
+}
 let issuerKeys = null; // { card, keys }, readied on first use
 const readyIssuer = async () => (issuerKeys ??= await setupIssuer(kit, consignor, mnemonic, (...x) => console.log("consign issuer:", ...x)).catch((e) => {
   issuerKeys = null;
@@ -300,10 +336,12 @@ async function consign(req, q, visitor) {
   const name = `${sha256}.${k.ext}`;
   if (!existsSync(`${FILES}/${name}`)) writeFileSync(`${FILES}/${name}`, file);
   const { card } = await readyIssuer();
+  // With the other holders' cards on file the sale publishes all three, the issuer's first, and bidders split each bid's key.
+  const holders = otherCards && [JSON.parse(card), ...otherCards];
   const made = await serial(consignor.evm, () =>
-    createListing(kit, consignor, card, { title, about, fileUrl: `${process.env.PUBLIC ?? "https://allot.timidan.xyz"}/api/files/${name}`, sha256, supply: shares, reserve: reserve * 1_000_000, deposit: DEPOSIT, seconds }),
+    createListing(kit, consignor, holders ? JSON.stringify({ v: 2, members: holders }) : card, { title, about, fileUrl: `${process.env.PUBLIC ?? "https://allot.timidan.xyz"}/api/files/${name}`, sha256, supply: shares, reserve: reserve * 1_000_000, deposit: DEPOSIT, seconds }),
   );
-  const listing = { saleId: made.saleId, title, by, about, kind: k.kind, peaks: k.kind === "audio" ? peaks : "", file: `/api/files/${name}`, sha256, token: made.token, createBlock: made.createBlock, closeAt: made.closeAt, createdAt: now, txs: made.txs, bidBlocks: [], scanned: made.createBlock, done: false };
+  const listing = { saleId: made.saleId, title, by, about, kind: k.kind, peaks: k.kind === "audio" ? peaks : "", file: `/api/files/${name}`, sha256, token: made.token, createBlock: made.createBlock, closeAt: made.closeAt, createdAt: now, txs: made.txs, bidBlocks: [], scanned: made.createBlock, done: false, ...(holders && { holders: holders.map((h) => h.address) }) };
   listings.push(listing);
   saveListings();
   return { saleId: made.saleId };
@@ -322,7 +360,7 @@ async function keepListings() {
       if (Date.now() >= l.closeAt) {
         const { keys } = await readyIssuer();
         const blocks = l.bidBlocks;
-        l.done = await serial(consignor.evm, () => finish(kit, consignor, keys, l, (...x) => console.log(new Date().toISOString(), ...x)));
+        l.done = await serial(consignor.evm, () => finish(kit, consignor, keys, l, (...x) => console.log(new Date().toISOString(), ...x), askHolders));
         l.bidBlocks = [...new Set([...blocks, ...l.bidBlocks])];
       }
       saveListings();
@@ -399,7 +437,7 @@ http
       }
       if (req.method === "GET" && url.pathname === "/api/listings") {
         return reply(res, 200, listings.map(({ saleId, title, by, about, kind, peaks, file, sha256, token, createBlock, closeAt, done }) =>
-          ({ saleId, title, by, about, kind, peaks, file, sha256, token, createBlock, closeAt, done, backupSaleId: listedBackup(saleId)?.saleId })));
+          ({ saleId, title, by, about, kind, peaks, file, sha256, token, createBlock, closeAt, done, backupSaleId: listedBackup(saleId)?.saleId, split: Boolean(listings.find((l) => l.saleId === saleId)?.holders) })));
       }
       const f = req.method === "GET" && url.pathname.match(/^\/api\/files\/([0-9a-f]{64})\.(jpg|png|webp|wav|ogg|mp3|m4a)$/);
       if (f && existsSync(`${FILES}/${f[1]}.${f[2]}`)) {

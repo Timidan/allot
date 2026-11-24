@@ -17,6 +17,6 @@ const rest = {
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   resolve: { alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) } },
-  server: { proxy: rest },
+  server: { proxy: rest, fs: { allow: [".."] } }, // lib/bid.js shares server/split.mjs with the keeper
   preview: { proxy: rest },
 });

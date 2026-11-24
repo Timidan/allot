@@ -42,7 +42,7 @@ Built for QoreChain's *Build Before Q-Day* developer fest, category Encrypted Ap
 
 ### The four Encrypted Apps requirements, on testnet
 
-- **ML-KEM-1024 encryption, client side.** [A guest bid in sale 2](https://allot.timidan.xyz/tx/0xb8140a32734deb7c96730659a41c6c6fd25d56c7ba7665d480b98d5182e4e4a3): a 3,543-byte QoreSeal envelope sealed in the bidder's browser to two recipients, the seller and the bidder's receipt key ([`sealBid`](web/src/lib/bid.js)).
+- **ML-KEM-1024 encryption, client side.** [A guest bid in sale 2](https://allot.timidan.xyz/tx/0xb8140a32734deb7c96730659a41c6c6fd25d56c7ba7665d480b98d5182e4e4a3): a 3,543-byte QoreSeal envelope sealed in the bidder's browser to two recipients, the seller and the bidder's receipt key ([`sealBid`](web/src/lib/bid.js)). New listings split the key instead, so no single key opens a bid: [a split bid in a test sale](https://allot.timidan.xyz/tx/0x1eb9af789cafa89b86d832dbed28cfaca63a6d4a9f74a5c1bbf1691b8ef579d8) is 7,246 bytes, the sealed bid and three key pieces, each sealed to a different holder's registered ML-KEM-1024 key.
 - **Registered recipient keys.** The ML-KEM-1024 key registrations of [the sample seller](https://dashboard.qorechain.io/explorer/tx/7CFADD8568BB28FD7D1D5862C5983E2E18EE6017E13761D9B0D7529FA6E05C55) and of [Allot's listing account](https://dashboard.qorechain.io/explorer/tx/A761C38759DC012D7B3603DF0A285AF590CF4D0E4C5C20D883CB7486CC5948DE), both hybrid-signed with ML-DSA-87.
 - **ML-DSA key binding.** Each sale's `SaleCreated` event carries the seller's recipient card, signed with ML-DSA-87. The browser checks it against both registered keys before it seals, and refuses a card that doesn't match.
 - **Client-side decryption.** Bid in [sale 10](https://allot.timidan.xyz/sales/10), open until 15 Dec 2026, as a guest, then open *My bid*: your browser opens your envelope with the key in your receipt and checks it against the fingerprint the contract stored. The receipt file opens the bid in any other browser too. The practice auction on the home page opens all five of its bids in the browser. Sellers open bids outside the browser (see [Limits](#limits)).
@@ -63,10 +63,11 @@ To bid from your own wallet, use QoreX on testnet: the browser extension, or the
 1. **The shares.** Each item is a CMTAT token built from QoreChain's Asset Kit, with the kit's holder rule: only accounts with a registered ML-DSA-87 key can hold it. The issuer grants the sale contract the right to mint it.
 2. **The seller's card.** The seller registers an ML-KEM-1024 key on chain and signs a recipient card that binds it to their account with ML-DSA-87. The card is written into the sale when it is created.
 3. **A bid.** The bidder's browser checks that the card belongs to the sale's seller and matches the keys registered on chain. It then seals `{price, shares, salt}`, padded to a fixed size, to two recipients: the seller, and a fresh key kept only in the bidder's receipt. The contract stores only a fingerprint of the bid and the sealed envelope. Every envelope is the same size and every bid locks the same deposit, so neither says anything about the bid. With the receipt, the bidder's browser can open their own bid from the chain at any time.
+   **Split bids (new listings).** The sale publishes three cards: the seller's, a second key holder's and a recovery key's. The browser checks that they are three different registered accounts, seals the bid to the receipt key only, and cuts that key's seed into three pieces, one sealed to each holder ([`split.mjs`](server/split.mjs)). Any two holders rebuild the key; one holder's piece is random bytes. Each piece is tied to its sale, its bid and its holder, so a piece copied anywhere else won't open.
 4. **Who may bid.** The contract admits a bidder only if QoreChain's PQC key-status precompile (`0x0A02`) shows a registered ML-DSA-87 key. A bid is an EVM transaction, accepted only inside an EVM window the bidder opened with an ML-DSA-87-signed native transaction. Guest windows are scoped to the sale contract and fUSD.
 5. **The close.** The seller opens each envelope, and the contract checks each opened bid against its fingerprint. The best bids win and every winner pays the lowest winning price. Winners' shares are minted to them, and the rest of every deposit comes back. A bid nobody opens loses 10% of its deposit to the bids that were opened. Allot takes 1% of the proceeds.
 
-When a visitor lists an item through /sell, Allot acts as the auction house: its own account issues the token, holds the card's key, and a keeper opens, settles and pays out after the close.
+When a visitor lists an item through /sell, Allot acts as the auction house: its own account issues the token, and a keeper opens, settles and pays out after the close. For a split sale the keeper holds one key of three. After the close it asks the second key holder ([`witness.mjs`](server/witness.mjs)) for its pieces; that holder reads the close time and the bids from the chain itself and gives nothing while the sale is open. If it is down, the recovery key takes its place.
 
 ## QoreChain integration
 
@@ -105,8 +106,10 @@ Allot's drill account is `qor12xwh4pplcscdy7s8mt4ye2xm2m93k2enhhfj3c` (`0x519d7A
 ## Limits
 
 - **Bids are private until the close, not for ever.** When the sale ends, every bid's price and shares are published on chain as it is opened.
-- **The seller can read bids before the close.** Bids are sealed to the seller, or to Allot for listed items, and QoreSeal has no timed release. Other bidders and outsiders cannot read them.
-- **Sellers open bids outside the browser.** For listed items, Allot's server opens a guest bid when it is placed, to refuse one that could never be opened, and its keeper opens every bid after the close to publish it on chain. The sample sales were opened by the seller's own script. Only the bidder's side of the decryption runs in the browser.
+- **In older sales the seller can read bids before the close.** In the sample sales and in sale 10, bids are sealed to the seller, or to Allot for listed items. Other bidders and outsiders cannot read them.
+- **In split sales one operator still holds all three keys.** No single key opens a bid, and the second key holder refuses until the chain says the sale has closed. But that holder runs as a separate container on the same server as the sale server, so the split is between processes, not machines, and Allot's owner holds the recovery key too. The design is for three independent holders; this demo doesn't have them. Any two holders who chose to could combine their pieces before the close.
+- **A split bid can't be checked when it arrives.** The server checks only what one key holder can: that the bid is well formed, that each piece is addressed to its holder, and that its own piece opens. A bid built to pass that and still not open stays unopened. It then loses 10% of its deposit, and the sale's settlement waits for the two-day opening window.
+- **Sellers open bids outside the browser.** For single-key listings, Allot's server opens a guest bid when it is placed, to refuse one that could never be opened. Its keeper opens every bid after the close to publish it on chain. The sample sales were opened by the seller's own script. Only the bidder's side of the decryption runs in the browser.
 - **A bid's own signature is ECDSA.** It is admitted only inside a window opened with ML-DSA-87, but the bid transaction itself is not ML-DSA-signed.
 - **Bidding from QoreX** has not been tested with a real wallet, and QoreX's mobile app may not yet send EVM transactions.
 - **Listed items' proceeds stay with Allot** on testnet; they are not forwarded to the person who listed the item.
@@ -137,6 +140,8 @@ npm start
 
 For one optional backup pair, set `BACKUP_LOTS=11,12` using the IDs of two open Allot-managed lots with the same deposit. The backup must close at least an hour after the first lot’s reveal deadline. The guest enters a separate maximum for the backup. Allot queues its ciphertext and places it only after the first bid was opened, returned the full deposit and delivered no shares. The auction house holds the opening key and decrypts a guest bid to validate it before submitting it. Keep the server’s `DATA` volume across restarts. It holds the signed transaction and receipt status in `guest-bids.json`.
 
+For split bids, run a second key holder from its own mnemonic, apart from the server: `WITNESS_MNEMONIC_FILE=… ISSUER=<the listing account, 0x…> node witness.mjs`. `node witness.mjs card` prints a holder's card; do the same once with a recovery mnemonic that stays offline. Put the two cards in a JSON array and start the server with `HOLDER_CARDS_FILE` set to that file and `HOLDERS_AT` to the key holder's address (`http://127.0.0.1:8788`). Each holder needs about 1 testnet QOR to register its keys. Without these two settings, listings stay single-key.
+
 The contract:
 
 ```bash
@@ -152,7 +157,7 @@ forge test
 | [`contracts/`](contracts) | `SealedSale.sol` (sealed-bid, uniform-price sale with the PQC holder check) and its Foundry tests |
 | [`web/`](web) | The site: Vite, React 19, Tailwind 4, viem. Pages in [`web/src`](web/src): home, sales, one sale, sell, transaction |
 | [`web/src/lib/`](web/src/lib) | Sealing (`bid.js`), chain reads (`chain.js`), QoreX (`qorex.js`) |
-| [`server/`](server) | Guest bids and listings ([`guest.mjs`](server/guest.mjs)), token issuing and the keeper ([`consign.mjs`](server/consign.mjs)), chain helpers ([`kit.mjs`](server/kit.mjs)), guest funding ([`setup-guests.mjs`](server/setup-guests.mjs)) |
+| [`server/`](server) | Guest bids and listings ([`guest.mjs`](server/guest.mjs)), token issuing and the keeper ([`consign.mjs`](server/consign.mjs)), the split-bid format shared with the browser ([`split.mjs`](server/split.mjs)), the second key holder ([`witness.mjs`](server/witness.mjs)), chain helpers ([`kit.mjs`](server/kit.mjs)), guest funding ([`setup-guests.mjs`](server/setup-guests.mjs)) |
 | [`server/kit/`](server/kit) | The Asset Kit's CMTAT build used for listed items |
 
 ## Credits
