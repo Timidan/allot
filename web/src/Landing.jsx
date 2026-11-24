@@ -181,7 +181,7 @@ export default function Landing() {
   const sampleOpen = open && !open.settled && open.closeAt > Date.now();
   const liveLots = listed.filter((lot) => !lot.done && lot.closeAt > Date.now());
   const live = liveLots.find((lot) => lot.backupSaleId !== undefined) ?? liveLots[0];
-  const withFile = liveLots.find((lot) => lot.winners) ?? live; // the agents' sample command names a lot with a winners' file when one is open
+  const withFile = liveLots.find((entry) => entry.lot.winners) ?? live; // the agents' sample command names a lot with a winners' file when one is open
   const bidHref = sampleOpen ? `/sales/${openSale.saleId}` : live ? `/sales/${live.saleId}` : "/sales";
   const bidLabel = sampleOpen ? "Place a bid" : "See an open lot";
 

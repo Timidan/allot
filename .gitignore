@@ -6,3 +6,7 @@ cache/
 server/data/
 launch.json
 .env
+
+# The agent tool writes these where it is run. A receipt holds the key that opens its bid.
+allot-bid-*.json
+allot-sale-*-winners-file.*
