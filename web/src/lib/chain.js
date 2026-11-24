@@ -2,6 +2,7 @@
 import { qorechainTestnet, toQorAddress } from "@qorechain/evm";
 import { createPublicClient, decodeEventLog, hexToBytes, http, parseAbi } from "viem";
 import { SALES, SALE_CONTRACT, readListings } from "../sale.js";
+import { winnersHash } from "../../../server/split.mjs";
 
 export const pub = createPublicClient({ chain: qorechainTestnet, transport: http("https://evm-testnet.qore.host") });
 const abi = parseAbi([
@@ -29,6 +30,19 @@ export async function readCard(address, s) {
   const owner = card.v === 2 ? card.members?.[0]?.address : card.address;
   if (owner !== toQorAddress(sale.issuer)) throw new Error("This sale's sealing key doesn't belong to its seller, so Allot won't seal a bid to it.");
   return { ...card, address: owner };
+}
+// The SHA-256 of the file a lot's winners receive, as the lot's token recorded it when it was issued (its first
+// Information event, a few blocks before the sale was created), or null. Read from the chain: `createBlock` is only
+// a hint of where to look. The issuer can change the text later, so with `beforeBlock` (the block of a bid) a
+// promise that was not on chain before that bid does not count.
+export async function readWinnersHash(address, saleId, createBlock, beforeBlock) {
+  const s = await pub.readContract({ address, abi, functionName: "getSale", args: [BigInt(saleId)] });
+  const [first] = await pub.getContractEvents({
+    address: s.asset, abi: parseAbi(["event Information(string newInformation)"]), eventName: "Information",
+    fromBlock: BigInt(Math.max(0, createBlock - 500)), toBlock: BigInt(createBlock),
+  });
+  if (!first || (beforeBlock !== undefined && Number(first.blockNumber) >= Number(beforeBlock))) return null;
+  return winnersHash(first.args.newInformation);
 }
 const dollars = (x) => Number(x) / 1e6; // fUSD has 6 decimals
 
@@ -136,7 +150,7 @@ export async function readReceiptBid(receipt) {
     pub.readContract({ ...query, functionName: "bids", args: [saleId, bidIndex] }),
   ]);
   const claim = bid[6] ? (await find("Claimed", { saleId, bidIndex }, block))[0] : null;
-  return { tx, placed: placed.args, sale, claimed: bid[6], claim };
+  return { tx, block, placed: placed.args, sale, claimed: bid[6], claim };
 }
 
 // QoreChain's REST API, read through the page's own /rest relay (the API sends no CORS headers).

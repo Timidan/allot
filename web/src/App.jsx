@@ -272,7 +272,7 @@ function BidBox({ sale, entry, backupEntry, onPlaced }) {
       </p>
       <p className="mt-2 text-[15px] text-muted-foreground">
         {entry.lot.split
-          ? <>Sealed in your browser with ML-KEM-1024 to a key in your receipt. That key is cut in three pieces, each sealed to a different registered key holder: any two can open your bid, no one of them alone. Other bidders can't read it.</>
+          ? <>Sealed in your browser with ML-KEM-1024 to a key in your receipt. That key is cut in three pieces, each sealed to a different registered key holder: any two can open your bid, no one of them alone. Other bidders can't read it.{entry.lot.winners ? <> Every winner also gets a file, sealed to the same key; its SHA-256 is in the lot's token: <span className="font-mono text-[14px]" title={entry.lot.winners}>{short(entry.lot.winners)}</span>.</> : null}</>
           : <>Sealed in your browser with ML-KEM-1024 to {entry.lot.consigned ? "Allot's" : "the seller's"} registered key, <span className="font-mono text-[14px]" title={sale.issuer}>{short(sale.issuer)}</span>, and to a key in your receipt. Other bidders can't read it; {reader(entry.lot)} can.</>}
       </p>
       <TestnetHelp />

@@ -25,7 +25,7 @@ A secret-bid marketplace on QoreChain testnet. Every bid is sealed with post-qua
 
 ![Allot's home page: the headline, and the sale of Walk on the Beach](docs/featured.png)
 
-Allot sells shares of real things (a painting, a song, a fund) by sealed bid. A bid is sealed in the bidder's browser with ML-KEM-1024 to the seller's registered key, so no other bidder can read it before the sale ends, not even with a quantum computer. When time runs out, every bid is opened on chain, the best bids win, and every winner pays the same price.
+Allot sells shares of real things (a painting, a song, a fund) by sealed bid. A bid is sealed in the bidder's browser with ML-KEM-1024 to the seller's registered key, so no other bidder can read it before the sale ends, not even with a quantum computer. When time runs out, every bid is opened on chain, the best bids win, and every winner pays the same price. In new listings the key that opens a bid is split between three registered key holders, so no single key can. An agent or a script can list, bid and read its result from a shell with [one small tool](#from-an-agent-or-a-script), with no wallet.
 
 Sale 1, ten shares of *Walk on the Beach*, ran on testnet with four sealed bids. Nobody else could read them until the close. Then the seller opened all four in [one transaction](https://allot.timidan.xyz/tx/0x584953b2ad1710f8d3438f837056a3bcf19d4c5688fc3060a85883ebf0a832ba), the contract checked each against its fingerprint, and the sale cleared at 24 fUSD:
 
@@ -64,7 +64,7 @@ The same guest route works without a browser. [`web/agent.mjs`](web/agent.mjs) s
 cd web && npm install
 node agent.mjs lots                           # lots open now: shares, lowest price, deposit, close time
 node agent.mjs bid 10 2 4                     # sale 10: up to 2 shares at up to 4 fUSD each; writes a private receipt file
-node agent.mjs result allot-bid-1a2b3c4d.json # opens your own bid from the chain; after the close, shares won and deposit returned
+node agent.mjs result allot-bid-1a2b3c4d.json # opens your own bid from the chain; after the close, shares won, deposit returned, and the winners' file if the lot has one
 node agent.mjs list cover.png --title "Cover" --by "An agent" --rights
 ```
 
@@ -80,6 +80,8 @@ To bid from your own wallet, use QoreX on testnet: the browser extension, or the
    **Split bids (new listings).** The sale publishes three cards: the seller's, a second key holder's and a recovery key's. The browser checks that they are three different registered accounts, seals the bid to the receipt key only, and cuts that key's seed into three pieces, one sealed to each holder ([`split.mjs`](server/split.mjs)). Any two holders rebuild the key; one holder's piece is random bytes. Each piece is tied to its sale, its bid and its holder, so a piece copied anywhere else won't open.
 4. **Who may bid.** The contract admits a bidder only if QoreChain's PQC key-status precompile (`0x0A02`) shows a registered ML-DSA-87 key. A bid is an EVM transaction, accepted only inside an EVM window the bidder opened with an ML-DSA-87-signed native transaction. Guest windows are scoped to the sale contract and fUSD.
 5. **The close.** The seller opens each envelope, and the contract checks each opened bid against its fingerprint. The best bids win and every winner pays the lowest winning price. Winners' shares are minted to them, and the rest of every deposit comes back. A bid nobody opens loses 10% of its deposit to the bids that were opened. Allot takes 1% of the proceeds.
+
+6. **A file for the winners.** A lot can promise its winners a file: its SHA-256 goes into the token's information text when the token is issued, so the promise is on chain before the sale exists. After the payout a winner asks for its copy with the public half of the key in its receipt. The server reads the bid from the chain, checks that it won and that the key is the one the bid was sealed to, and seals the file to that key with ML-KEM-1024. The winner's browser, or [`agent.mjs`](web/agent.mjs), opens it with the receipt, checks it against the SHA-256 promised on chain, and only then saves it. The sealed copy opens with that receipt and nothing else, so it can sit in public.
 
 When a visitor lists an item through /sell, Allot acts as the auction house: its own account issues the token, and a keeper opens, settles and pays out after the close. For a split sale the keeper holds one key of three. After the close it asks the second key holder ([`witness.mjs`](server/witness.mjs)) for its pieces; that holder reads the close time and the bids from the chain itself and gives nothing while the sale is open. If it is down, the recovery key takes its place.
 
@@ -123,6 +125,7 @@ Allot's drill account is `qor12xwh4pplcscdy7s8mt4ye2xm2m93k2enhhfj3c` (`0x519d7A
 - **In older sales the seller can read bids before the close.** In the sample sales and in sale 10, bids are sealed to the seller, or to Allot for listed items. Other bidders and outsiders cannot read them.
 - **In split sales one operator still holds all three keys.** No single key opens a bid, and the second key holder refuses until the chain says the sale has closed. But that holder runs as a separate container on the same server as the sale server, so the split is between processes, not machines, and Allot's owner holds the recovery key too. The design is for three independent holders; this demo doesn't have them. Any two holders who chose to could combine their pieces before the close.
 - **A split bid can't be checked when it arrives.** The server checks only what one key holder can: that the bid is well formed, that each piece is addressed to its holder, and that its own piece opens. A bid built to pass that and still not open stays unopened. It then loses 10% of its deposit, and the sale's settlement waits for the two-day opening window.
+- **A winners' file is private from non-winners, not from Allot.** Allot's server holds the file as it is and seals a copy for each winner, so its operator can read it. Every winning bid gets the same file whatever its size, and nothing stops a winner from passing it on. Only Allot's operator can attach a file to a lot, and only in a split sale: a lister can promise only a file the operator already holds.
 - **Sellers open bids outside the browser.** For single-key listings, Allot's server opens a guest bid when it is placed, to refuse one that could never be opened. Its keeper opens every bid after the close to publish it on chain. The sample sales were opened by the seller's own script. Only the bidder's side of the decryption runs in the browser.
 - **A bid's own signature is ECDSA.** It is admitted only inside a window opened with ML-DSA-87, but the bid transaction itself is not ML-DSA-signed.
 - **Bidding from QoreX** has not been tested with a real wallet, and QoreX's mobile app may not yet send EVM transactions.
@@ -155,6 +158,8 @@ npm start
 For one optional backup pair, set `BACKUP_LOTS=11,12` using the IDs of two open Allot-managed lots with the same deposit. The backup must close at least an hour after the first lot’s reveal deadline. The guest enters a separate maximum for the backup. Allot queues its ciphertext and places it only after the first bid was opened, returned the full deposit and delivered no shares. The auction house holds the opening key and decrypts a guest bid to validate it before submitting it. Keep the server’s `DATA` volume across restarts. It holds the signed transaction and receipt status in `guest-bids.json`.
 
 For split bids, run a second key holder from its own mnemonic, apart from the server: `WITNESS_MNEMONIC_FILE=… ISSUER=<the listing account, 0x…> node witness.mjs`. `node witness.mjs card` prints a holder's card; do the same once with a recovery mnemonic that stays offline. Put the two cards in a JSON array and start the server with `HOLDER_CARDS_FILE` set to that file and `HOLDERS_AT` to the key holder's address (`http://127.0.0.1:8788`). Each holder needs about 1 testnet QOR to register its keys. Without these two settings, listings stay single-key.
+
+For a file sealed to each winner, first put the file in the server's data folder as `winners/<sha256>`, then list the lot with `--winners <file>` (the tool sends only the file's SHA-256). It needs a split sale. The server never serves the file as it is.
 
 The contract:
 

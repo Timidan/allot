@@ -11,9 +11,10 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync, createReadStream } 
 import http from "node:http";
 import { fetchKemKey } from "@qorechain/qoreseal/network";
 import { hexToBytes } from "viem";
-import { OPEN_FOR, bidsOf, checkBid, checkSplit, createListing, finish, setupIssuer } from "./consign.mjs";
+import { OPEN_FOR, bidsOf, checkBid, checkSplit, createListing, finish, sealDelivery, setupIssuer } from "./consign.mjs";
 import { guestBids, guestBidStatus, requestIdPattern } from "./guest-bids.mjs";
 import { FUSD, REST, SALE, fusd as fusdContract, makeKit, pub, sale } from "./kit.mjs";
+import { WINNERS_TYPES, winnersHash } from "./split.mjs";
 const fusdAbi = fusdContract.abi;
 
 const ISSUER = "0xCc7BfdE6Ed012e6E90B32D01979B87e34Ac00464"; // the treasury issuer of the sample sales
@@ -39,6 +40,12 @@ const topper = await kit.account(Number(process.env.TOPUP ?? 50));
 const LISTINGS = `${DATA}/listings.json`;
 const FILES = `${DATA}/files`;
 mkdirSync(FILES, { recursive: true });
+// A lot's file for its winners is put in WINNERS by the operator, named by its SHA-256, and is never served as it
+// is. Each winner's sealed copy is kept in SEALED; those open only with that winner's receipt.
+const WINNERS = `${DATA}/winners`;
+const SEALED = `${DATA}/deliveries`;
+mkdirSync(WINNERS, { recursive: true });
+mkdirSync(SEALED, { recursive: true });
 const listings = existsSync(LISTINGS) ? JSON.parse(readFileSync(LISTINGS, "utf8")) : [];
 const saveListings = () => writeFileSync(LISTINGS, JSON.stringify(listings, null, 2));
 const ISSUERS = [ISSUER, consignor.evm].map((x) => x.toLowerCase()); // guests bid only into sales these created
@@ -313,6 +320,14 @@ async function consign(req, q, visitor) {
   if (!Number.isInteger(reserve) || reserve < 1 || reserve > 10) throw bad("The lowest price must be a whole number of fUSD from 1 to 10."); // bids are whole fUSD
   if (!LENGTHS.includes(seconds)) throw bad("Pick one of the sale lengths.");
   if (q.get("rights") !== "1") throw bad("Confirm you may sell shares in it.");
+  const winners = q.get("winners") ?? undefined; // the SHA-256 of a file for the winners; the file itself is not uploaded here
+  if (winners !== undefined && !/^[0-9a-f]{64}$/.test(winners)) throw bad("Name the winners' file by its SHA-256: 64 lowercase hex characters.");
+  // Only a file the operator has already put in WINNERS can be promised, and only in a split sale (see sealDelivery).
+  if (winners && !existsSync(`${WINNERS}/${winners}`)) throw bad("Allot holds no file with that SHA-256. Its operator adds winners' files before a lot is listed.");
+  if (winners && !otherCards) throw bad("A winners' file needs a sale whose bids are split between key holders.");
+  // The description goes into the same token text as the promise, so it may not carry a promise of its own.
+  if (winnersHash(about)) throw bad("The description can't promise a winners' file. Allot's operator attaches one.");
+  const winnersType = winners && WINNERS_TYPES.includes(q.get("winnersType")) ? q.get("winnersType") : undefined;
   const peaks = /^[0-9a-z]{64}$/.test(q.get("peaks") ?? "") ? q.get("peaks") : ""; // a song's waveform, drawn by the page
   const now = Date.now();
   if (now - (lastListing.get(visitor) ?? 0) < PER_VISITOR) throw Object.assign(new Error("One listing per visitor a day."), { status: 429 });
@@ -339,12 +354,40 @@ async function consign(req, q, visitor) {
   // With the other holders' cards on file the sale publishes all three, the issuer's first, and bidders split each bid's key.
   const holders = otherCards && [JSON.parse(card), ...otherCards];
   const made = await serial(consignor.evm, () =>
-    createListing(kit, consignor, holders ? JSON.stringify({ v: 2, members: holders }) : card, { title, about, fileUrl: `${process.env.PUBLIC ?? "https://allot.timidan.xyz"}/api/files/${name}`, sha256, supply: shares, reserve: reserve * 1_000_000, deposit: DEPOSIT, seconds }),
+    createListing(kit, consignor, holders ? JSON.stringify({ v: 2, members: holders }) : card, { title, about, fileUrl: `${process.env.PUBLIC ?? "https://allot.timidan.xyz"}/api/files/${name}`, sha256, supply: shares, reserve: reserve * 1_000_000, deposit: DEPOSIT, seconds, winners }),
   );
-  const listing = { saleId: made.saleId, title, by, about, kind: k.kind, peaks: k.kind === "audio" ? peaks : "", file: `/api/files/${name}`, sha256, token: made.token, createBlock: made.createBlock, closeAt: made.closeAt, createdAt: now, txs: made.txs, bidBlocks: [], scanned: made.createBlock, done: false, ...(holders && { holders: holders.map((h) => h.address) }) };
+  const listing = { saleId: made.saleId, title, by, about, kind: k.kind, peaks: k.kind === "audio" ? peaks : "", file: `/api/files/${name}`, sha256, token: made.token, createBlock: made.createBlock, closeAt: made.closeAt, createdAt: now, txs: made.txs, bidBlocks: [], scanned: made.createBlock, done: false, ...(holders && { holders: holders.map((h) => h.address) }), ...(winners && { winners, winnersType }) };
   listings.push(listing);
   saveListings();
   return { saleId: made.saleId };
+}
+
+// A winner asks for its copy of the lot's file, with the public half of the key in its receipt. The sale, the bid
+// and the sealed bid are read from the chain; nothing the caller says is trusted except that key, and it must be
+// the one the bid was sealed to. Sealed copies are kept and can be handed to anyone: only the receipt opens them.
+async function delivery({ saleId, bidIndex, key } = {}) {
+  const refuse = (status, m) => Object.assign(new Error(m), { status });
+  if (!Number.isInteger(saleId) || !Number.isInteger(bidIndex) || saleId < 0 || bidIndex < 0 || typeof key !== "string" || !/^0x[0-9a-fA-F]{3136}$/.test(key)) {
+    throw refuse(400, "Send the sale, the bid's number and the receipt's public ML-KEM-1024 key.");
+  }
+  const l = listings.find((x) => x.saleId === saleId);
+  const path = l?.winners && `${WINNERS}/${l.winners}`;
+  if (!path || !existsSync(path)) throw refuse(404, "This lot has no file for its winners.");
+  const kept = `${SEALED}/${saleId}-${bidIndex}.bin`;
+  if (existsSync(kept)) return readFileSync(kept);
+  const s = await pub.readContract({ ...sale, functionName: "getSale", args: [BigInt(saleId)] });
+  if (!s.settled) throw refuse(409, "This sale isn't settled yet.");
+  const bid = await pub.readContract({ ...sale, functionName: "bids", args: [BigInt(saleId), BigInt(bidIndex)] }).catch(() => null);
+  if (!bid || bid[4] === 0n) throw refuse(403, "This bid won no shares.");
+  const placed = (await Promise.all([...new Set(l.bidBlocks)].map((block) =>
+    pub.getContractEvents({ ...sale, eventName: "BidPlaced", args: { saleId: BigInt(saleId), bidIndex: BigInt(bidIndex) }, fromBlock: BigInt(block), toBlock: BigInt(block) })))).flat()[0];
+  if (!placed) throw refuse(404, "That bid isn't in this sale.");
+  const file = readFileSync(path);
+  if (createHash("sha256").update(file).digest("hex") !== l.winners) throw new Error(`the winners' file of sale ${saleId} doesn't match its SHA-256`);
+  const made = sealDelivery(file, saleId, placed.args.fingerprint, placed.args.envelope, key);
+  if (made.why) throw refuse(403, `No copy for this request: ${made.why}.`);
+  writeFileSync(kept, made.sealed);
+  return Buffer.from(made.sealed);
 }
 
 // Every minute: note each consigned sale's new bids (so the page finds QoreX bids too), and finish closed ones.
@@ -432,12 +475,17 @@ http
       if (req.method === "POST" && url.pathname === "/api/fusd") {
         return reply(res, 200, await topUp(await body(req), visitor));
       }
+      if (req.method === "POST" && url.pathname === "/api/delivery") {
+        const sealed = await delivery(await body(req, 8 * 1024));
+        res.writeHead(200, { "content-type": "application/octet-stream", "x-content-type-options": "nosniff", "cache-control": "no-store" });
+        return res.end(sealed);
+      }
       if (req.method === "POST" && url.pathname === "/api/consign") {
         return reply(res, 200, await consign(req, url.searchParams, visitor));
       }
       if (req.method === "GET" && url.pathname === "/api/listings") {
-        return reply(res, 200, listings.map(({ saleId, title, by, about, kind, peaks, file, sha256, token, createBlock, closeAt, done }) =>
-          ({ saleId, title, by, about, kind, peaks, file, sha256, token, createBlock, closeAt, done, backupSaleId: listedBackup(saleId)?.saleId, split: Boolean(listings.find((l) => l.saleId === saleId)?.holders) })));
+        return reply(res, 200, listings.map(({ saleId, title, by, about, kind, peaks, file, sha256, token, createBlock, closeAt, done, winners, winnersType }) =>
+          ({ saleId, title, by, about, kind, peaks, file, sha256, token, createBlock, closeAt, done, winners, winnersType, backupSaleId: listedBackup(saleId)?.saleId, split: Boolean(listings.find((l) => l.saleId === saleId)?.holders) })));
       }
       const f = req.method === "GET" && url.pathname.match(/^\/api\/files\/([0-9a-f]{64})\.(jpg|png|webp|wav|ogg|mp3|m4a)$/);
       if (f && existsSync(`${FILES}/${f[1]}.${f[2]}`)) {

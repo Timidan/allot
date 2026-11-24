@@ -3,11 +3,11 @@
 // The keeper works from chain state only, so a restart is safe.
 import { readFileSync } from "node:fs";
 import { REGISTER_KEM_KEY_TYPE_URL, buildRegisterPqcKeyMsg, signProofOfPossession } from "@qorechain/sdk";
-import { deriveSealKeys, envelopeSize, open, parseEnvelope, recipientHint, sealKeysFromSeed, signRecipientCard } from "@qorechain/qoreseal";
+import { deriveSealKeys, envelopeSize, open, parseEnvelope, recipientHint, seal, sealKeysFromSeed, signRecipientCard, validateMlkemPublicKey } from "@qorechain/qoreseal";
 import { fetchKemKey } from "@qorechain/qoreseal/network";
 import { decodeEventLog, encodeAbiParameters, hexToBytes, keccak256, parseAbi, toBytes, zeroAddress } from "viem";
 import { CHAIN_ID, REST, SALE, chain, pub } from "./kit.mjs";
-import { HOLDERS, isSplit, pieceAad, piecePurpose, rebuild, splitBidPurpose, unpack } from "./split.mjs";
+import { HOLDERS, deliveryAad, deliveryPurpose, isSplit, pieceAad, piecePurpose, rebuild, splitBidPurpose, unpack, winnersLine } from "./split.mjs";
 
 const RULE = "0x5d7a6de418a3d7d3c280c7e1856830942d394872"; // the Asset Kit holder rule: holders need a registered ML-DSA-87 key
 const TOKEN = JSON.parse(readFileSync(new URL("./kit/CMTATStandalone.json", import.meta.url), "utf8"));
@@ -111,6 +111,31 @@ export function openSplit(mine, theirs, saleId, bidder, fingerprint, envelope, d
   return checkOpened(plaintext, saleId, bidder, fingerprint, deposit);
 }
 
+// A winner's copy of the lot's file, sealed with ML-KEM-1024 to the key in that winner's receipt. `keyHex` must be the
+// key the bid itself was sealed to, which only the receipt holder can produce: the bid on chain shows only a hint
+// of it. The copy opens with the receipt and nothing else, so it can be public.
+export function sealDelivery(file, saleId, fingerprint, envelopeHex, keyHex) {
+  let key;
+  try {
+    key = hexToBytes(keyHex);
+    validateMlkemPublicKey(key);
+  } catch {
+    return { why: "that is not an ML-KEM-1024 key" };
+  }
+  // Only a split bid: its sealed bid has one recipient, the receipt key. A single-key bid is also sealed to the
+  // seller's registered key, which is public, so anyone could ask with that key and be handed a copy.
+  const envelope = hexToBytes(envelopeHex);
+  let mine = false;
+  try {
+    const { salt, entries } = parseEnvelope(unpack(envelope).bid);
+    mine = entries.length === 1 && same(entries[0].hint, recipientHint(salt, key));
+  } catch {
+    // not a split bid, or malformed: it has no receipt key to deliver to
+  }
+  if (!mine) return { why: "that key isn't this bid's receipt key" };
+  return { sealed: seal({ chainId: CHAIN_ID, purpose: deliveryPurpose(SALE, saleId), recipients: [{ mlkemPublicKey: key }], plaintext: file, aad: deliveryAad(fingerprint), mode: "mlkem" }) };
+}
+
 // Readies the issuer once: its ML-DSA-87 key, its encryption key, and the card bidders seal to. Returns the card.
 export async function setupIssuer(kit, a, mnemonic, log = () => {}) {
   if (!(await pub.readContract({ ...sale, functionName: "isHybridHolder", args: [a.evm] }))) {
@@ -127,14 +152,16 @@ export async function setupIssuer(kit, a, mnemonic, log = () => {}) {
 
 // One listing: the item's token (its terms name the file and its SHA-256), the minter role for the sale contract,
 // then the sale. Three transactions from the issuer.
-export async function createListing(kit, a, card, { title, about, fileUrl, sha256, supply, reserve, deposit, seconds }) {
+// `winners` is the SHA-256 of a file only the winners will get; it goes first in the token's information text, so
+// it is on chain before the sale exists and nothing in `about` can stand in for it.
+export async function createListing(kit, a, card, { title, about, fileUrl, sha256, supply, reserve, deposit, seconds, winners }) {
   await kit.ensureWindow(a); // unscoped: a scoped window refuses contract creation
   const symbol = title.replace(/[^A-Za-z0-9]/g, "").slice(0, 6).toUpperCase() || "SHARE";
   // ponytail: viem's deployContract, not @qorechain/evm's: the kit's takes no gas limit, and the RPC estimates only up to 5,000,000.
   const deployTx = await a.wallet.deployContract({
     abi: TOKEN.abi, bytecode: TOKEN.bytecode.object, chain, gas: 7_000_000n,
     args: [zeroAddress, a.evm, { name: `${title} shares (testnet)`, symbol, decimalsIrrevocable: 0 },
-      { tokenId: `ALLOT-${sha256.slice(0, 12)}`, terms: { name: "Testnet sample: confers no ownership", uri: fileUrl, documentHash: `0x${sha256}` }, information: about || `Testnet shares in ${title}.` },
+      { tokenId: `ALLOT-${sha256.slice(0, 12)}`, terms: { name: "Testnet sample: confers no ownership", uri: fileUrl, documentHash: `0x${sha256}` }, information: `${winners ? `${winnersLine(winners)} ` : ""}${about || `Testnet shares in ${title}.`}` },
       { ruleEngine: RULE }],
   });
   const deployed = await pub.waitForTransactionReceipt({ hash: deployTx });

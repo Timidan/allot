@@ -33,7 +33,7 @@ export function readListings() {
       saleId: l.saleId, closeAt: l.closeAt, done: l.done, backupSaleId: l.backupSaleId, ranges: [[l.createBlock, l.createBlock + 9999]],
       lot: {
         title: l.title, artist: l.by, details: l.about, alt: `${l.title}, by ${l.by}`,
-        image: l.kind === "image" ? l.file : null, audio: l.kind === "audio" ? l.file : null, peaks: l.peaks ?? "", consigned: true, split: Boolean(l.split),
+        image: l.kind === "image" ? l.file : null, audio: l.kind === "audio" ? l.file : null, peaks: l.peaks ?? "", consigned: true, split: Boolean(l.split), winners: l.winners, winnersType: l.winnersType,
         note: "Listed by its owner; Allot runs the sale. Testnet sample: these shares are test tokens and stand for nothing.", credit: "",
       },
     })))

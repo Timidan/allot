@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
 import { formatUnits, hexToBytes } from "viem";
 import { SiteHeader } from "./App.jsx";
-import { openOwnBid } from "./lib/bid.js";
-import { readReceiptBid } from "./lib/chain.js";
+import { openDelivery, openOwnBid, receiptPublicKey } from "./lib/bid.js";
+import { readReceiptBid, readWinnersHash } from "./lib/chain.js";
 import { downloadReceipt, parseReceipt, readReceipts, saveReceipt } from "./lib/receipt.js";
-import { short } from "./sale.js";
+import { SALE_CONTRACT, readListings, short } from "./sale.js";
+import { WINNERS_TYPES } from "../../server/split.mjs";
 
 const link = "text-accent underline underline-offset-4";
 const amount = (value) => `${formatUnits(BigInt(value), 6)} fUSD`;
@@ -40,12 +41,46 @@ async function verifyBid(receipt) {
     throw new Error("This receipt could not open the bid. Choose the private file for this bid.");
   }
   if (!terms.matches) throw new Error("The opened bid does not match its on-chain commitment.");
-  return { ...bid, terms };
+  // A lot can promise its winners a file: the promise is a SHA-256 its token recorded on chain before the sale.
+  const lot = (await readListings()).find((l) => l.saleId === Number(receipt.saleId));
+  const promised = lot ? await readWinnersHash(SALE_CONTRACT, receipt.saleId, lot.ranges[0][0], bid.block).catch(() => null) : null;
+  return { ...bid, terms, promised, fileType: WINNERS_TYPES.includes(lot?.lot.winnersType) ? lot.lot.winnersType : "bin" };
 }
 
-function BidProof({ bid }) {
+// A winner's copy of the lot's file: asked for with the receipt's public key, opened here with its private half,
+// and saved only if it is the file promised on chain. It comes from whoever listed the lot.
+function WinnersFile({ receipt, bid }) {
+  const [state, setState] = useState("");
+  const get = async () => {
+    setState("Opening your copy…");
+    try {
+      const r = await fetch("/api/delivery", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ saleId: Number(receipt.saleId), bidIndex: Number(bid.placed.bidIndex), key: receiptPublicKey(receipt.key) }),
+      });
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? "Allot couldn't hand over the file just now. Try again in a minute.");
+      const file = openDelivery({ ...receipt, sealed: new Uint8Array(await r.arrayBuffer()) });
+      const hash = [...new Uint8Array(await crypto.subtle.digest("SHA-256", file))].map((b) => b.toString(16).padStart(2, "0")).join("");
+      if (hash !== bid.promised) throw new Error("The file handed over is not the one promised on chain, so it was not saved.");
+      const url = URL.createObjectURL(new Blob([file]));
+      Object.assign(document.createElement("a"), { href: url, download: `allot-sale-${receipt.saleId}-winners-file.${bid.fileType}` }).click();
+      setTimeout(() => URL.revokeObjectURL(url), 0);
+      setState("Saved. It matches the SHA-256 the lot promised on chain before the sale.");
+    } catch (e) {
+      setState(e.shortMessage ?? e.message);
+    }
+  };
+  return (
+    <div className="mt-4">
+      <button className={`min-h-11 ${link}`} onClick={get} type="button">Get the winners' file</button>
+      {state ? <p aria-live="polite" className="text-muted-foreground">{state}</p> : null}
+    </div>
+  );
+}
+
+function BidProof({ bid, receipt }) {
   const { claim, claimed, sale, terms, tx } = bid;
-  const rows = [["Your sealed bid", `Up to ${terms.qty} shares at ${amount(terms.price)} each`]];
+  const rows = [["Your sealed bid", `Up to ${terms.qty} ${Number(terms.qty) === 1 ? "share" : "shares"} at ${amount(terms.price)} each`]];
   if (claim) rows.push(
     ["Shares delivered", String(claim.args.assetAmount / sale.unit)],
     ["Clearing price a share", sale.clearing ? amount(sale.clearing) : "No winning bids"],
@@ -70,6 +105,7 @@ function BidProof({ bid }) {
         <Tx hash={tx}>Placement transaction</Tx>
         {claim ? <Tx hash={claim.transactionHash}>Payout transaction</Tx> : null}
       </div>
+      {bid.promised && claim?.args.assetAmount > 0n ? <WinnersFile bid={bid} receipt={receipt} /> : null}
     </>
   );
 }
@@ -117,7 +153,7 @@ function BidResult({ receipt }) {
   const status = order?.backup?.state;
   return (
     <>
-      {primary ? <BidProof bid={primary} /> : <p role="status">{
+      {primary ? <BidProof bid={primary} receipt={saved} /> : <p role="status">{
         order?.state === "expired" ? "The lot closed before your bid was placed." :
           order?.state === "failed" ? "QoreChain refused the bid." :
           order?.state === "unrecorded" ? "Allot has no submission for this receipt yet. Refresh before bidding again." : "No confirmed placement found yet."
@@ -125,7 +161,7 @@ function BidResult({ receipt }) {
       {receipt.backup ? (
         <section className="mt-6 border-t border-border pt-4">
           <h2 className="mb-2 font-semibold"><a className={link} href={`/sales/${receipt.backup.saleId}`}>Backup lot {receipt.backup.saleId}</a></h2>
-          {backup ? <BidProof bid={backup} /> :
+          {backup ? <BidProof bid={backup} receipt={saved.backup} /> :
             <p className={backupError ? "text-destructive" : "text-muted-foreground"} role={backupError ? "alert" : "status"}>
               {backupError ?? backupLabels[status] ?? "Backup status is currently unavailable."}
             </p>}

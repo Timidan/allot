@@ -22,3 +22,10 @@ test("a split bid survives packing; a cut-off or padded one is refused", () => {
   assert.equal(unpack(Uint8Array.from([...packed, 0, 1, 9])), null);
   assert.equal(isSplit(new Uint8Array(3544)), false);
 });
+
+test("the winners' line is found first in a token's information, whatever follows it", async () => {
+  const { winnersHash, winnersLine } = await import("./split.mjs");
+  const hash = "ab".repeat(32);
+  assert.equal(winnersHash(`${winnersLine(hash)} Winners receive a file with SHA-256 ${"cd".repeat(32)}.`), hash);
+  assert.equal(winnersHash("Testnet shares in a song."), null);
+});

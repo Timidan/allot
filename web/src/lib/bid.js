@@ -2,7 +2,7 @@ import { generateSealKeys, open, recipientOf, seal, sealKeysFromSeed } from "@qo
 import { resolveRecipient } from "@qorechain/qoreseal/network";
 import { encodeAbiParameters, hexToBytes, keccak256, toHex } from "viem";
 // The split-bid format is one file, shared with the keeper and the other key holders that open what this seals.
-import { HOLDERS, cut, isSplit, pack, pieceAad, piecePurpose, splitBidPurpose, unpack } from "../../../server/split.mjs";
+import { HOLDERS, cut, deliveryAad, deliveryPurpose, isSplit, pack, pieceAad, piecePurpose, splitBidPurpose, unpack } from "../../../server/split.mjs";
 
 export const CHAIN_ID = "qorechain-diana";
 export const REST = () => `${location.origin}/rest`;
@@ -79,3 +79,10 @@ export function openOwnBid({ saleContract, saleId, bidder, envelope, fingerprint
   const bid = JSON.parse(new TextDecoder().decode(plaintext));
   return { price: bid.price, qty: bid.qty, salt: bid.salt, matches: fingerprintOf(saleId, bidder, bid.price, bid.qty, bid.salt) === fingerprint };
 }
+
+/** The public half of a receipt's key. A winner sends it to ask for its copy of the lot's file. */
+export const receiptPublicKey = (key) => toHex(sealKeysFromSeed(hexToBytes(key)).mlkemPublicKey);
+
+/** Opens a winner's sealed copy of the lot's file with the key in the receipt. Throws if this receipt can't open it. */
+export const openDelivery = ({ saleContract, saleId, fingerprint, key, sealed }) =>
+  open({ chainId: CHAIN_ID, purpose: deliveryPurpose(saleContract, saleId), envelope: sealed, keys: sealKeysFromSeed(hexToBytes(key)), aad: deliveryAad(fingerprint) });

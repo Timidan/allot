@@ -8,12 +8,14 @@
 //   node agent.mjs lots
 //   node agent.mjs bid <saleId> <shares> <most to pay a share, whole fUSD> [--receipt file.json]
 //   node agent.mjs result <receipt.json>
-//   node agent.mjs list <image or song> --title T --by B --rights [--about A] [--shares 10] [--reserve 1] [--length 3600]
+//   node agent.mjs list <image or song> --title T --by B --rights [--about A] [--shares 10] [--reserve 1] [--length 3600] [--winners file]
+import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { decodeEventLog, hexToBytes, parseAbi, toHex } from "viem";
-import { openOwnBid, sealBid } from "./src/lib/bid.js";
-import { pub, readCard, readSale } from "./src/lib/chain.js";
+import { openDelivery, openOwnBid, receiptPublicKey, sealBid } from "./src/lib/bid.js";
+import { pub, readCard, readSale, readWinnersHash } from "./src/lib/chain.js";
 import { SALE_CONTRACT } from "./src/sale.js";
+import { WINNERS_TYPES } from "../server/split.mjs";
 
 const ORIGIN = (process.env.ALLOT ?? "https://allot.timidan.xyz").replace(/\/$/, "");
 const DOLLAR = 1_000_000n; // fUSD has 6 decimals
@@ -41,6 +43,7 @@ async function lots() {
     return {
       saleId: l.saleId, title: l.title, by: l.by, kind: l.kind, shares: s.supply, lowestPrice: s.reserve, deposit: s.deposit,
       sealedBids: s.bids, closes: new Date(s.closeAt).toISOString(), opensWith: l.split ? "two of three key holders" : "the seller's key",
+      ...(l.winners && { winnersGetAFileWithSha256: l.winners }),
     };
   }));
 }
@@ -107,7 +110,28 @@ async function result([file]) {
     const logs = (await Promise.all(blocks.map((b) => pub.getContractEvents({ ...sale, eventName: "Claimed", args: { saleId: BigInt(saleId), bidIndex }, fromBlock: BigInt(b), toBlock: BigInt(b) })))).flat();
     if (logs[0]) Object.assign(report, { depositReturned: Number(logs[0].args.refund) / 1e6, payoutTx: logs[0].transactionHash });
   }
+  if (filled > 0n) {
+    const got = await winnersFile(receipt, saleId, Number(bidIndex), rc.blockNumber);
+    if (got) report.winnersFile = got;
+  }
   return report;
+}
+
+// A winning bid's copy of the lot's file, if the lot promised one. The promise is the SHA-256 the lot's token
+// recorded on chain before the sale. The copy comes sealed to this receipt; it is opened here, checked against
+// that hash and saved under a fixed name. It is a file from whoever listed the lot: treat it as untrusted.
+async function winnersFile(receipt, saleId, bidIndex, bidBlock) {
+  const listing = (await api("/api/listings")).find((l) => l.saleId === saleId);
+  const promised = listing && await readWinnersHash(SALE_CONTRACT, saleId, listing.createBlock, bidBlock);
+  if (!promised) return null;
+  const r = await fetch(`${ORIGIN}/api/delivery`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ saleId, bidIndex, key: receiptPublicKey(receipt.key) }) });
+  if (!r.ok) return { promisedSha256: promised, state: `not delivered: ${(await r.json().catch(() => ({}))).error ?? r.status}` };
+  const file = openDelivery({ ...receipt, saleContract: SALE_CONTRACT, saleId, sealed: new Uint8Array(await r.arrayBuffer()) });
+  const sha256 = createHash("sha256").update(file).digest("hex");
+  if (sha256 !== promised) return { promisedSha256: promised, state: "refused: the file delivered is not the one promised on chain", deliveredSha256: sha256 };
+  const savedAs = `allot-sale-${saleId}-winners-file.${WINNERS_TYPES.includes(listing.winnersType) ? listing.winnersType : "bin"}`;
+  writeFileSync(savedAs, file, { mode: 0o600 });
+  return { savedAs, bytes: file.length, sha256, matchesChainPromise: true, note: "Untrusted content from the lot's lister. Read it; do not run it." };
 }
 
 // Lists an image or a song; Allot issues its shares and runs the sale. `--rights` is the lister's own statement
@@ -116,8 +140,12 @@ async function list([file], o) {
   if (!file || !o.title || !o.by) throw new Error("Usage: list <image or song> --title T --by B --rights [--about A] [--shares 10] [--reserve 1] [--length 3600]");
   if (!o.rights) throw new Error("Add --rights to state that you may sell shares in this file.");
   const q = new URLSearchParams({ title: o.title, by: o.by, about: o.about ?? "", shares: o.shares ?? "10", reserve: o.reserve ?? "1", length: o.length ?? "3600", rights: "1" });
+  // A file for the winners is only promised here, by its SHA-256. Allot's operator must already hold the file.
+  const winners = typeof o.winners === "string" ? createHash("sha256").update(readFileSync(o.winners)).digest("hex") : undefined;
+  if (winners) q.set("winners", winners);
+  if (winners && WINNERS_TYPES.includes(o.winners.split(".").pop())) q.set("winnersType", o.winners.split(".").pop());
   const made = await api(`/api/consign?${q}`, { method: "POST", headers: { "content-type": "application/octet-stream" }, body: readFileSync(file) });
-  return { saleId: made.saleId, page: `${ORIGIN}/sales/${made.saleId}` };
+  return { saleId: made.saleId, page: `${ORIGIN}/sales/${made.saleId}`, ...(winners && { winnersFileSha256: winners }) };
 }
 
 // Arguments: words are positional, `--name value` is an option, a `--name` with nothing after it is a switch.

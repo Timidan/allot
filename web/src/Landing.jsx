@@ -181,6 +181,7 @@ export default function Landing() {
   const sampleOpen = open && !open.settled && open.closeAt > Date.now();
   const liveLots = listed.filter((lot) => !lot.done && lot.closeAt > Date.now());
   const live = liveLots.find((lot) => lot.backupSaleId !== undefined) ?? liveLots[0];
+  const withFile = liveLots.find((lot) => lot.winners) ?? live; // the agents' sample command names a lot with a winners' file when one is open
   const bidHref = sampleOpen ? `/sales/${openSale.saleId}` : live ? `/sales/${live.saleId}` : "/sales";
   const bidLabel = sampleOpen ? "Place a bid" : "See an open lot";
 
@@ -251,6 +252,26 @@ export default function Landing() {
         title="A post-quantum pass for every bidder"
       >
         <Pass book={book} down={down} sealed={sealed} />
+      </Section>
+
+      <Section
+        id="agents"
+        sub={<Sub>The guest route also works from a shell, with no browser and no wallet. The bid is sealed on the caller's machine, and a private receipt file opens it later. A lot can come with a file, sealed to each winner's receipt.</Sub>}
+        title="An agent or a script can bid too"
+      >
+        <dl className="@container border-t border-foreground/15">
+          {[
+            ["node agent.mjs lots", "The lots open now, with their terms."],
+            [`node agent.mjs bid ${withFile?.saleId ?? "<sale>"} 2 4`, `Sale ${withFile?.saleId ?? "<sale>"}: up to 2 shares, at up to 4 fUSD each.`],
+            ["node agent.mjs result receipt.json", "Your own bid, opened from the chain. After the close, what it won, and the winners' file if the lot has one."],
+          ].map(([command, gives]) => (
+            <div className="flex flex-wrap items-baseline gap-x-6 gap-y-1 border-b border-foreground/15 py-3" key={command}>
+              <dt className="text-[15px] sm:text-[17px] @2xl:w-[23rem]">{command}</dt>
+              <dd className="m-0 w-full text-[15px] text-muted-foreground sm:text-[17px] @2xl:w-auto @2xl:flex-1">{gives}</dd>
+            </div>
+          ))}
+        </dl>
+        <a className={`mt-6 inline-block ${link} ${tap}`} href="https://github.com/Timidan/allot#from-an-agent-or-a-script" rel="noreferrer" target="_blank">How to run it, on GitHub ↗</a>
       </Section>
 
       <Section sub={<Sub>{painting.title}, {painting.artist}. Testnet sample. Only accounts with a post-quantum key can hold its shares.</Sub>} title="The real sale">

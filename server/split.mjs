@@ -74,3 +74,14 @@ export function pieceAad(fingerprint, holder) {
   if (!/^0x[0-9a-fA-F]{64}$/.test(fingerprint) || !(holder >= 0 && holder < HOLDERS)) throw new Error("A piece is tied to a bid's fingerprint and a holder.");
   return Uint8Array.from([...fingerprint.slice(2).match(/../g).map((b) => parseInt(b, 16)), holder]);
 }
+
+// ---- A file for the winners ----
+// A lot can come with a file only its winners can open. The file's SHA-256 is written into the token's information
+// text when the token is issued, before any bid, and each winner's copy is sealed to the key in their own receipt.
+export const winnersLine = (sha256) => `Winners receive a file with SHA-256 ${sha256}.`;
+export const winnersHash = (information) => /Winners receive a file with SHA-256 ([0-9a-f]{64})\./.exec(information ?? "")?.[1] ?? null;
+export const deliveryPurpose = (saleContract, saleId) => `allot:delivery:v1:${saleContract.toLowerCase()}:${saleId}`;
+/** What a winners' file may be saved as. The type is the lister's word, so it only ever picks an ending from this list. */
+export const WINNERS_TYPES = ["txt", "md", "json", "csv", "pdf", "zip", "png", "jpg", "wav", "mp3"];
+/** A copy is tied to the bid it was won with: the bid's fingerprint is authenticated with it. */
+export const deliveryAad = (fingerprint) => pieceAad(fingerprint, 0).subarray(0, 32);
