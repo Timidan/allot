@@ -151,13 +151,16 @@ function How({ last, book, bidHref, down }) {
   );
 }
 
-const Facts = ({ open, className = "" }) => (
-  <dl className={`space-y-1 ${className}`}>
-    <div className="flex justify-between gap-6"><dt>Shares on sale</dt><dd>{open?.supply ?? "–"}</dd></div>
-    <div className="flex justify-between gap-6"><dt>Sealed bids</dt><dd>{open?.bids ?? "–"}</dd></div>
-    <div className="flex justify-between gap-6"><dt>Ends in</dt><dd>{open ? <Countdown to={open.closeAt} /> : "–"}</dd></div>
-  </dl>
-);
+const Facts = ({ open, className = "" }) => {
+  const ended = open && (open.settled || Date.now() >= open.closeAt); // as on the sale page: an ended sale shows its price
+  return (
+    <dl className={`space-y-1 ${className}`}>
+      <div className="flex justify-between gap-6"><dt>Shares on sale</dt><dd>{open?.supply ?? "–"}</dd></div>
+      <div className="flex justify-between gap-6"><dt>Sealed bids</dt><dd>{open?.bids ?? "–"}</dd></div>
+      <div className="flex justify-between gap-6"><dt>{ended ? "Price" : "Ends in"}</dt><dd>{!open ? "–" : ended ? (open.settled && open.sold ? money(open.clearing) : "–") : <Countdown to={open.closeAt} />}</dd></div>
+    </dl>
+  );
+};
 
 export default function Landing() {
   const [open, setOpen] = useState(null);
@@ -214,7 +217,7 @@ export default function Landing() {
                 Bid without being seen.<br />Even after Q&#8209;Day.
               </h1>
               <p className="mt-6 max-w-[44ch] text-pretty text-[17px] leading-normal text-foreground/80 md:text-[19px]">
-                Secret-bid sales on QoreChain for shares of real things: art, a song, a fund. Your browser seals each bid with post-quantum encryption (ML&#8209;KEM&#8209;1024), so no other bidder can read it before the close, even with a quantum computer. At the close, every bid opens on chain, the best win, and every winner pays the same price.
+                Secret-bid sales on QoreChain for shares of real things, like a painting or a song. Your browser seals each bid with post-quantum encryption (ML&#8209;KEM&#8209;1024), so no other bidder can read it before the close, even with a quantum computer. At the close, every bid opens on chain, the best win, and every winner pays the same price.
               </p>
             </div>
           </div>
